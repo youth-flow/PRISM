@@ -27,7 +27,7 @@ sinfo -p gpu-l20
 squeue -u "$USER"
 git clone https://github.com/youth-flow/PRISM.git /project/sigroup/$USER/PRISM
 cd /project/sigroup/$USER/PRISM
-# 若初始代码尚在 codex/prism-scaffold 分支，切到该分支。
+git switch main
 ```
 
 GitHub 远端必须已有代码后才能 clone；本地设置 origin 不等于已 push。
