@@ -1,0 +1,41 @@
+Bootstrap: docker
+From: docker.io/pytorch/pytorch@sha256:2b59b1b91885677814f78be1f8df48a25d5dc952eb6580eaecfefca510f9afd3
+
+%labels
+    org.opencontainers.image.title "PRISM HPC4 runtime"
+    org.opencontainers.image.source "https://github.com/youth-flow/PRISM"
+    org.opencontainers.image.revision "{{ GIT_COMMIT }}"
+    prism.requirements.sha256 "{{ LOCK_SHA256 }}"
+
+%files
+    containers/requirements-hpc4.lock /opt/prism/containers/requirements-hpc4.lock
+    pyproject.toml /opt/prism/pyproject.toml
+    README.md /opt/prism/README.md
+    src /opt/prism/src
+    tests /opt/prism/tests
+    configs /opt/prism/configs
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates git
+    rm -rf /var/lib/apt/lists/*
+    python -m pip install --no-cache-dir pip==24.3.1 setuptools==75.6.0 wheel==0.45.1
+    python -m pip install --no-cache-dir --only-binary=:all: --no-deps -r /opt/prism/containers/requirements-hpc4.lock
+    python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/prism
+    python -m pip check
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    export PYTHONNOUSERSITE=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONUNBUFFERED=1
+    export TOKENIZERS_PARALLELISM=false
+
+%test
+    set -eu
+    python -c 'import torch, trl; assert torch.__version__.split("+")[0] == "2.7.1"; assert torch.version.cuda == "12.6"; assert trl.__version__ == "0.15.2"'
+    python -m pip check
+    python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp /tmp/prism-tests

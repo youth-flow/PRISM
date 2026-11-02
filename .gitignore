@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+tmp/
+runs/
+data/
+assets/
+dist/
+*.sif
+.env
+configs/local*.yaml
+slurm-*.out

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prism-rlhf"
+version = "0.1.0"
+description = "Prospective-Regret-Aware Preference Sampling for Reward Modeling in RLHF"
+requires-python = ">=3.11,<3.12"
+dependencies = ["numpy>=1.26,<3", "scipy>=1.15,<1.16", "PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+llm = ["torch>=2.7,<3", "transformers==4.52.3", "trl==0.15.2", "peft==0.15.2", "accelerate==1.7.0", "datasets==3.6.0"]
+test = ["pytest==8.3.5"]
+
+[project.scripts]
+prism = "prism.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
