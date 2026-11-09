@@ -12,3 +12,7 @@ dist/
 .env
 configs/local*.yaml
 slurm-*.out
+# Provider documents include private account credentials. Keep local only.
+/计算服务/
+/local/
+/releases/

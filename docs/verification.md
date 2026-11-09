@@ -1,16 +1,15 @@
-# Scaffold verification — 2026-11-02
+# 盐城平台迁移验证 — 2026-11-09
 
-本次交付实际完成的验证：
+本次实际验证：
 
-- Windows / Python 3.11，PyTorch **2.7.1+cpu**；其余实验依赖按 `containers/requirements-hpc4.lock` 安装。
-- `python -m pytest -q --tb=short`：**11 passed**。
-- `python -m pip check`：通过。
-- 默认配置结构验证通过，并正确列出尚待填写的四类、九个选择字段。
-- Bash 脚本语法检查、GitHub workflow YAML 解析通过。
-- `git ls-remote origin` 成功；本次检查远端无 refs，为空仓库。
+- 本地全套测试：**13 passed, 1 skipped**。跳过项为 Windows 没有符号链接创建权限的路径逃逸测试；Linux CI 保留该测试。
+- 平台脚本测试覆盖 GPU/CPU 路由、account/GRES、依赖参数、无提交 dry-run、目录边界、脏工作区拒绝和测试模式禁止真实提交。
+- 原有数学和微型 PPO 产物链测试保持通过，实验采样和奖励算法未因平台迁移改变。
+- Python 依赖检查、默认实验配置结构检查及 Bash 语法检查通过。
+- 通过核对 Xshell 已保存的主机公钥建立原生 SSH 连接，读取了真实共享目录、账户、队列、资源描述、module 和工具版本。当前 Slurm 队列中本账户没有运行作业。
+- 调度网页：本机 direct 超时、现有代理返回 502、登录节点 direct 超时；SSH/SFTP 正常。没有改变系统代理、VPN 或路由。
+- 新平台配置默认关闭提交。没有提交 sbatch/srun 作业，没有在集群执行容器、模型、Torch 或 GPU smoke。
 
-测试涵盖：PDF proxy normal equation 和 K covariance；FW 梯度数值差分、单调性、gap，以及与独立 SLSQP 优化器的目标值对照；经验 prompt 权重；BT 数值恢复及标签方向；输入不变性；重复 edge 的独立 draw 调用与断点续跑；EOS hidden reward 对齐和全序列 log-prob；真实微型 GPT-2 / TRL PPO 更新与 LoRA 重载；完整候选—设计—标签—RM—PPO—评估—汇总的产物链。
+运行时 SIF 尚待首次构建/上传和驱动兼容验收；CPU-only 阶段在当前授权 GPU partition 中能否被接受也尚待平台确认。上述检查不等于正式实验已可放行。
 
-完整链路中的 Judge 是仅存在于测试中的显式模拟对象，**不是实际大模型 Judge 验收或效果实验**。微型 PPO 使用真实优化器和模型更新。极小测试中的 TRL 单 minibatch 方差诊断可能未定义，输出 JSON 中明确保存为 null；GPT-2 Conv1D 的 PEFT 方向自动修正 warning 也是预期行为。
-
-尚未执行：GitHub 上的新镜像构建、Linux 容器测试、HPC4 CUDA smoke、用户最终选择的 SFT/Judge/benchmark 验收，以及正式标签预算实验。工程已提供这些步骤的入口，不将本地测试称为平台验收。
+源资料包含私人凭证，`计算服务/`、`local/` 与 `tmp/` 已排除 Git。部署记录与本次本机网络诊断保存在本地 `local/`，不随公开代码发布。

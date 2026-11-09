@@ -1,4 +1,4 @@
-name: build-hpc4-image
+name: build-runtime-image
 
 on:
   workflow_dispatch:
@@ -8,14 +8,14 @@ permissions:
   packages: write
 
 concurrency:
-  group: hpc4-image-${{ github.ref }}
+  group: runtime-image-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   APPTAINER_VERSION: "1.5.2"
   APPTAINER_DEB_SHA256: "b5ea4ddbb7db2bfd396b4e64adaedb75d990fc7efd851189472899a1bd521d89"
-  GHCR_PACKAGE: "ghcr.io/youth-flow/prism-hpc4"
-  GHCR_PACKAGE_PATH: "youth-flow/prism-hpc4"
+  GHCR_PACKAGE: "ghcr.io/youth-flow/prism-runtime"
+  GHCR_PACKAGE_PATH: "youth-flow/prism-runtime"
 
 jobs:
   build-and-publish:
@@ -64,7 +64,7 @@ jobs:
           export SOURCE_DATE_EPOCH
           SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${GITHUB_SHA}")"
           lock_sha256="$(
-            sha256sum containers/requirements-hpc4.lock | awk '{print $1}'
+            sha256sum containers/requirements.lock | awk '{print $1}'
           )"
           sudo --preserve-env=APPTAINER_CACHEDIR,APPTAINER_TMPDIR,SOURCE_DATE_EPOCH \
             apptainer build \
@@ -72,16 +72,16 @@ jobs:
             --reproducible \
             --build-arg "GIT_COMMIT=${GITHUB_SHA}" \
             --build-arg "LOCK_SHA256=${lock_sha256}" \
-            dist/prism-hpc4.sif containers/prism-hpc4.def \
+            dist/prism-runtime.sif containers/prism.def \
             2>&1 | tee dist/apptainer-build.log
-          sudo chown "$(id -u):$(id -g)" dist/prism-hpc4.sif
+          sudo chown "$(id -u):$(id -g)" dist/prism-runtime.sif
 
       - name: Validate and describe the candidate SIF
         shell: bash
         run: |
           set -euo pipefail
-          apptainer test dist/prism-hpc4.sif
-          apptainer exec --cleanenv dist/prism-hpc4.sif python - <<'PY'
+          apptainer test dist/prism-runtime.sif
+          apptainer exec --cleanenv dist/prism-runtime.sif python - <<'PY'
           from importlib.metadata import version
           import json
           import torch
@@ -99,10 +99,10 @@ jobs:
           assert payload["torch_cuda"] == "12.6"
           assert payload["transformers"] == "4.52.3"
           PY
-          apptainer exec --cleanenv dist/prism-hpc4.sif \
+          apptainer exec --cleanenv dist/prism-runtime.sif \
             python -m pip freeze --all | LC_ALL=C sort > dist/pip-freeze.txt
-          apptainer inspect --json dist/prism-hpc4.sif > dist/apptainer-inspect.json
-          apptainer exec --cleanenv dist/prism-hpc4.sif python -m pip check
+          apptainer inspect --json dist/prism-runtime.sif > dist/apptainer-inspect.json
+          apptainer exec --cleanenv dist/prism-runtime.sif python -m pip check
 
       - name: Publish the SIF as an ORAS artifact
         id: publish
@@ -120,7 +120,7 @@ jobs:
                 --username "${GITHUB_ACTOR}" \
                 --password-stdin \
                 oras://ghcr.io
-          apptainer push --authfile "${authfile}" dist/prism-hpc4.sif "${uri}"
+          apptainer push --authfile "${authfile}" dist/prism-runtime.sif "${uri}"
           rm -f -- "${authfile}"
 
           token="$(
@@ -148,9 +148,9 @@ jobs:
             sha256sum "${RUNNER_TEMP}/manifest.json" | awk '{print "sha256:" $1}'
           )"
           test "${observed_manifest_digest}" = "${manifest_digest}"
-          sif_sha256="$(sha256sum dist/prism-hpc4.sif | awk '{print $1}')"
+          sif_sha256="$(sha256sum dist/prism-runtime.sif | awk '{print $1}')"
           [[ "${sif_sha256}" =~ ^[0-9a-f]{64}$ ]]
-          sif_size="$(stat -c '%s' dist/prism-hpc4.sif)"
+          sif_size="$(stat -c '%s' dist/prism-runtime.sif)"
           python - "${RUNNER_TEMP}/manifest.json" "${sif_sha256}" "${sif_size}" <<'PY'
           import json
           import sys
@@ -178,12 +178,12 @@ jobs:
         run: |
           set -euo pipefail
           sha256sum \
-            containers/prism-hpc4.def \
-            containers/requirements-hpc4.lock \
+            containers/prism.def \
+            containers/requirements.lock \
             dist/apptainer-build.log \
             dist/apptainer-inspect.json \
             dist/pip-freeze.txt \
-            dist/prism-hpc4.sif \
+            dist/prism-runtime.sif \
             > dist/SHA256SUMS
           python - <<'PY'
           import json
@@ -191,7 +191,7 @@ jobs:
           from pathlib import Path
 
           payload = {
-              "schema_version": "prism-hpc4-image/v1",
+              "schema_version": "prism-runtime-image/v1",
               "git_commit": os.environ["GITHUB_SHA"],
               "package": os.environ["GHCR_PACKAGE"],
               "tag": "git-" + os.environ["GITHUB_SHA"],
@@ -207,7 +207,7 @@ jobs:
           PY
           cat dist/build-metadata.json
           {
-            echo "### HPC4 candidate image"
+            echo "### PRISM runtime candidate image"
             echo
             echo "- Git commit: \`${GITHUB_SHA}\`"
             echo "- ORAS: \`oras://${GHCR_PACKAGE}@${{ steps.publish.outputs.manifest_digest }}\`"
@@ -217,7 +217,7 @@ jobs:
       - name: Upload compact build evidence
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         with:
-          name: hpc4-image-evidence-${{ github.sha }}
+          name: runtime-image-evidence-${{ github.sha }}
           path: |
             dist/SHA256SUMS
             dist/apptainer-build.log

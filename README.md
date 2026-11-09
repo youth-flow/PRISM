@@ -21,7 +21,7 @@ Prospective-Regret-Aware Preference Sampling for Reward Modeling in RLHF.
 3. **Judge**：固定文本生成式 HF Judge 及 revision。统一的 A/B 模板，随机交换顺序后还原标签，必须输出严格 A 或 B。模型需能遵守该接口；先做小规模格式检查。
 4. **benchmark**：名称和转换后的 heldout JSONL。v1 已实现确定的短答案 normalized exact-match；自带复杂评分器的 benchmark 需要接其官方 evaluator，不能把这里的分数冒称为官方分数。
 
-这些是**四类选择、九个必填配置字段**。配置中已有一套统一预算、seeds、PPO/LoRA 参数，作为首轮默认协议，不是已调优参数。HF 上的模型必须先在 CPU Slurm 作业下载，GPU 作业默认离线。
+这些是**四类选择、九个必填配置字段**。配置中已有一套统一预算、seeds、PPO/LoRA 参数，作为首轮默认协议，不是已调优参数。HF 模型先单独下载到共享 cache，GPU 训练默认离线。
 
 Prompt JSONL 每行：
 ```json
@@ -62,7 +62,7 @@ python -m prism.cli evaluate-judge --config /path/to/frozen.yaml --method prism 
 python -m prism.cli aggregate --config /path/to/frozen.yaml
 ```
 
-HPC4 上用 [作业说明](docs/hpc4.md) 包装以上阶段，**不要在登录节点直接执行这些计算命令**。
+盐城集群使用 [平台操作说明](docs/yancheng.md) 包装以上阶段。源码、模型、cache 和结果全部放在 `online1`；登录节点只进行文件管理、软件准备和调度操作。当前处于平台准备阶段，配置默认禁止实际提交，`--dry-run` 可检查命令。
 
 ## 与数学方案对齐的位置
 
@@ -78,7 +78,9 @@ HPC4 上用 [作业说明](docs/hpc4.md) 包装以上阶段，**不要在登录�
 
 ## 当前边界
 
-这是可执行的第一版工程，而非已经完成的大模型实验。Windows CPU 测试不替代 HPC4 CUDA、真实模型和 Judge 的验收；容器工作流需首次构建验证。v1 每个训练作业一张 GPU、一个进程，可以并行跑不同单元，但多卡分布式训练尚未开放。
+当前平台为是石科技盐城集群，已核对账户可见的 A100 80GB 队列、共享目录和 Apptainer 模块。Windows CPU 测试不替代盐城 CUDA、真实模型和 Judge 的验收；容器需首次构建、校验并在未来作业中验收。v1 每个训练作业一张 GPU、一个进程。
+
+平台接口在 `scripts/yancheng/`，统一依赖在 `containers/requirements.lock`，容器配方为 `containers/prism.def`。提交默认关闭；[网络诊断说明](docs/network.md) 记录 SakuraCat 与 SSLVPN 的分工及调度网页排查结果。`计算服务/` 中的原始资料含私人登录信息，仅保留本地并已排除 Git。
 
 完整 EOS hidden dimension 默认不降维。dense optimal-design 的时间/内存随维度增长，应先测一轮设计成本，再决定是否另开投影消融；不要为了省计算默默改变 reward 表征。无正则 BT 在可分数据上可能没有有限 MLE，日志只报告数值拟合状态，不冒称存在性证明。评估中的优势尚待实验验证。
 

@@ -1,4 +1,4 @@
-# PRISM HPC4 runtime lock.
+# PRISM runtime lock (Linux x86_64, Apptainer).
 #
 # Target: CPython 3.11, Linux x86_64.
 # Base-provided and digest-locked: torch==2.7.1, CUDA 12.6, cuDNN 9.
