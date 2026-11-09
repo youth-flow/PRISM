@@ -4,6 +4,8 @@ Prospective-Regret-Aware Preference Sampling for Reward Modeling in RLHF.
 
 本工程按根目录《实验流程.pdf》搭建。研究变量是**标注前的比较边采样分布**：共享 SFT 候选池 → 三种 sampling → 固定 Judge 的新标签 → 冻结 EOS 表征上的线性 BT reward head → 相同 PPO/LoRA → 独立评测。
 
+[已确认的数据规模和模型选择](configs/study-plan.yaml)：H4 UltraFeedback 的 3,000 个 Design prompts、2,000 个 PPO prompts、500 个最终评估 prompts；主模型 Tulu-3-8B-SFT，小规模初试 OLMo-2-0425-1B-SFT。该文件也记录待确认的 benchmark/Judge 建议及 API 费用情景，**是研究计划，不是 CLI 运行配置**。两个版本的 UltraFeedback 不混淆：openbmb 原版只有 `train`，`train_gen/test_gen` 来自 H4 处理版。只使用 prompt，不使用现成回复与标签。实际样本 ID 尚待去重、排除 benchmark 重叠后固定。
+
 | sampling | 分布/目标 | 对照目的 |
 |---|---|---|
 | `empirical` | 经验 prompt 分布，每个 prompt 内均匀抽无序比较边 | 原始采样基线；固定候选数时等于所有边均匀分布 |

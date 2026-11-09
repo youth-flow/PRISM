@@ -1,0 +1,139 @@
+kind: prism_study_plan
+updated: '2026-11-09'
+execution: planning_only_no_cluster_jobs_or_paid_api_calls
+confirmed:
+  models:
+    main:
+      id: allenai/Llama-3.1-Tulu-3-8B-SFT
+      revision: f2a0b46b0cfda21003c6141b1ff837b7e165524d
+    pilot:
+      id: allenai/OLMo-2-0425-1B-SFT
+      revision: 0d85a3d037876ce6ac7d4311d994400fc66ac27f
+  prompts:
+    id: HuggingFaceH4/ultrafeedback_binarized
+    revision: 3949bf5f8c17c394422ccfab0c31ea9c20bdeb85
+    fields_to_use:
+    - prompt
+    - prompt_id
+    ignore_existing_responses_and_labels: true
+    split_seed: 20261109
+    design:
+      split: train_gen
+      count: 3000
+    ppo:
+      split: train_gen
+      count: 2000
+      disjoint_from:
+      - design
+    final_evaluation:
+      split: test_gen
+      count: 500
+      purposes:
+      - direct_win_rate
+      - sequence_kl
+    development:
+      split: test_gen
+      remaining_after_final_evaluation: true
+      maximum_count: 500
+    preparation:
+    - pin_revision
+    - normalize_and_deduplicate_prompts
+    - exclude_benchmark_overlap
+    - shuffle_once_and_save_ids
+    sample_ids_status: not_yet_materialized
+  samplers:
+  - empirical
+  - a_optimal
+  - prism
+recommendations_pending_confirmation:
+  benchmarks_ranked:
+  - rank: 1
+    name: IFEval
+    dataset: google/IFEval
+    prompts: 541
+    judge_api_calls: 0
+    metric: prompt-level strict; also report remaining official metrics
+  - rank: 2
+    name: AlpacaEval prompts, custom judge
+    dataset: tatsu-lab/alpaca_eval
+    prompts: 805
+    note: Not the original AlpacaEval 2.0 leaderboard protocol
+  - rank: 3
+    name: Arena-Hard-v2.0-Preview
+    prompts: 750
+    note: 500 hard plus 250 creative writing; optional later robustness study; judge
+      protocol must be declared
+  judges:
+    label: gpt-6.1-sol
+    evaluation: claude-sonnet-5-5
+cost_estimate_assumptions:
+  currency: USD
+  price_checked: '2026-11-09'
+  input_usd_per_million: 2
+  output_usd_per_million: 10
+  illustrative_label_budgets:
+  - 256
+  - 512
+  - 1024
+  training_seeds:
+  - 11
+  - 23
+  - 37
+  number_of_samplers: 3
+  main_model_label_calls: 16128
+  direct_evaluation:
+    prompts: 500
+    policy_comparisons_per_budget_seed: 5
+    calls: 22500
+    comparisons:
+    - empirical_vs_sft
+    - a_optimal_vs_sft
+    - prism_vs_sft
+    - prism_vs_empirical
+    - prism_vs_a_optimal
+  alpaca_evaluation:
+    largest_label_budget_only: true
+    policies_including_sft: 10
+    calls: 8050
+  main_model_total_calls_excluding_arena_hard: 46678
+  scenarios:
+  - name: short
+    input_tokens_per_call: 2000
+    billable_output_tokens_per_call: 128
+    usd_per_call: 0.00528
+    label_judge_usd: 85.16
+    evaluation_judge_usd: 161.3
+    total_usd: 246.46
+  - name: central
+    input_tokens_per_call: 3000
+    billable_output_tokens_per_call: 512
+    usd_per_call: 0.01112
+    label_judge_usd: 179.34
+    evaluation_judge_usd: 339.72
+    total_usd: 519.06
+  - name: long_reasoning
+    input_tokens_per_call: 5000
+    billable_output_tokens_per_call: 2000
+    usd_per_call: 0.03
+    label_judge_usd: 483.84
+    evaluation_judge_usd: 916.5
+    total_usd: 1400.34
+  exclusions:
+  - GPU_cost
+  - taxes_or_provider_markup
+  - API_retries
+  - development_evaluations
+  - Arena_Hard
+  - additional_beta_sweeps
+  note: Billed output includes reasoning tokens. Token assumptions are scenarios,
+    not measurements or spending caps. Budgets are illustrative, not newly confirmed.
+implementation_status: Recorded decisions only. Existing runtime still needs dual
+  API judge adapters, official benchmark adapters and expanded comparison evaluation.
+sources:
+- https://huggingface.co/datasets/openbmb/UltraFeedback
+- https://huggingface.co/datasets/HuggingFaceH4/ultrafeedback_binarized
+- https://github.com/google-research/google-research/tree/master/instruction_following_eval
+- https://github.com/tatsu-lab/alpaca_eval
+- https://github.com/Arena-OSS/arena-hard-auto
+- https://developers.openai.com/api/docs/models/gpt-6.1-sol
+- https://platform.claude.com/docs/en/models/sonnet-5-5/overview
