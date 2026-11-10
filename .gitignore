@@ -16,3 +16,5 @@ slurm-*.out
 /计算服务/
 /local/
 /releases/
+# Project-local reviewer prompts/responses are audit records, not published code.
+/.aris/

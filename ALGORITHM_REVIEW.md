@@ -1,0 +1,80 @@
+# PRISM 核心算法审计 — 2026-11-10
+
+## 结论
+
+对当前已冻结的有限候选 PRISM 定义，未发现 surrogate、K_hat、最优设计目标、梯度、FW/away-step、抽样方向或 reward/PPO 冻结链路的数学实现错误。审计发现并修复两处 contraction 性能问题，同时纠正线搜索复杂度注释；未改变目标、特征、采样约束、超参数或实验配置。
+
+本审计由主代理和两位继承当前模型设置的同系列子代理完成。`review_independence: same-family`，`acceptance_status: provisional`；它不是跨模型盲审或形式化验证。原始review trace保存在本地`.aris/traces/research-review/2026-11-10_run01/`，不提交公开仓库。
+
+## 1. 数学与实现逐项核对
+
+来源为根目录`实验流程.pdf` A2–A5及已确认的后续调整：本版两方法、单预算，以及固定L2 reward head。原始PDF B2为无正则MLE；增加L2是用户已明确同意的研究设定，不是本次审计偷偷更改。
+
+| 部分 | 实现与检查 |
+|---|---|
+| EOS特征 | 冻结SFT最后一层EOS hidden state；截断回答额外EOS仅用于特征 |
+| log-probability | 全部实际响应token的条件log-prob之和，包含采样EOS，不包含prompt或人工补EOS |
+| b拟合 | 只中心化目标logp，不中心化feature；求解sum平方损失+alpha倍L2 |
+| 候选概率 | 在每个prompt内对b^T phi做softmax |
+| K_hat | 每个prompt的概率加权协方差再平均；没有误加跨prompt均值项 |
+| 比较边 | 无序a<b，v=phi_a-phi_b；canonical标签1表示a胜出 |
+| Empirical | 均匀prompt、再均匀该prompt的边；J固定时等价于全边均匀 |
+| 设计目标 | A=lambda_design I+sum q_e v_e v_e^T；min trace(K_hat A^-1)，q在simplex |
+| 梯度 | -v_e^T A^-1 K_hat A^-1 v_e |
+| FW gap | q^T g-min g；有ridge时不能误写为max sensitivity-objective |
+| Away步 | 负gamma区间[-q_e/(1-q_e),0]对应可行的去质量方向；允许边权降到零 |
+| 线搜索 | A(gamma)=(1-gamma)A+gamma lambda I+gamma v_e v_e^T，ridge没有丢失 |
+| 收敛 | 末尾重新计算真实gap；未达容差则converged=false，采样阶段阻止生成标注查询 |
+| Reward | 均值BT+lambda_RM/2倍平方范数；不加importance weights或辅助logit |
+| PPO | actor更新LoRA；reward使用独立冻结SFT特征；reference为关闭LoRA的SFT |
+
+两个独立恒等式用于交叉核对：
+
+1. K_i = sum_(a<b) p_ia p_ib (phi_ia-phi_ib)(phi_ia-phi_ib)^T。这与weighted covariance的实现一致。
+2. d trace(K A^-1) = -trace(A^-1 K A^-1 dA)，因此上述梯度符号和矩阵顺序正确。
+
+## 2. 实际修复
+
+`src/prism/design.py`中K_hat和sensitivity的三元`np.einsum`原先使用默认未优化路径，现加`optimize=True`，使其采用等价的优化contraction。结果定义和归一化不变，仅浮点求和顺序可能产生正常舍入差异。
+
+线搜索仍含dense二次型`a @ T @ a`，每次评价为O(d^2)。原先O(d)注释不准确，已修正。Sherman–Morrison省去的是每个试探步重新求逆，并没有把dense二次型降成线性复杂度。
+
+主代理单BLAS线程、合成数据的kernel复测（sensitivity取三次中位数，K为单次计时）：
+
+| kernel / 规模 | 原耗时 | 优化后 | 比值 | 最大相对数值差异 |
+|---|---:|---:|---:|---:|
+| sensitivity：2000边×128维 | 0.02062s | 0.000969s | 21.27 | 3.58e-15 |
+| sensitivity：2000边×256维 | 0.07596s | 0.002745s | 27.67 | 2.72e-15 |
+| sensitivity：2000边×512维 | 0.30401s | 0.009405s | 32.32 | 1.84e-15 |
+| K：200 prompts×4候选×256维 | 0.05682s | 0.001400s | 40.58 | 2.00e-15 |
+
+这是对应kernel的本机小规模计时，不是完整设计阶段或正式2048维数据的加速承诺。计时原始数值保存在本地`local/prism-algorithm-audit.json`，不作为实验性能结果发布。
+
+## 3. 独立数值验证与回归测试
+
+- Surrogate与增广矩阵最小二乘解对照，不复用normal equation作为参考。
+- K_hat与上述pairwise covariance恒等式对照。
+- 梯度做方向/坐标有限差分；FW目标与独立构造A、直接solve并由SLSQP求解的结果对照。
+- 两条正交边的解析最优、rank-one/zero K、重复边和会触发away/drop的边界案例。
+- 刻意令FW仅迭代一次且容差严格，确认不能进入标注查询阶段。
+- tiny随机初始化OLMo2架构对照EOS reward及逐token logp，不仅使用GPT2替代架构。
+- n=1024、d=2048、可分rank-one样本的L2 BT，对照一维精确最优条件根。
+- 真实TRL对tiny OLMo2做一次CPU PPO更新：LoRA_B确实变化，adapter可重载，FrozenReward全部state_dict逐元素不变。
+
+子代理附加35个小型随机实例中，b/K_hat/梯度最大误差分别为2.22e-15、1.11e-15、5.15e-11；FW目标较SLSQP最多高4.90e-12。另一个主代理30实例压力检查（含不可观测方向的rank-deficient v）中，均通过设定FW容差；相对参考目标差异最大9.30e-7。
+
+持久回归测试位于`tests/test_prism_design_contract.py`与`tests/test_prism_model_contract.py`，连同原`test_math.py`已通过11项针对性检查；全套测试为82 passed、1 skipped（Windows符号链接权限），详见`docs/verification.md`。
+
+## 4. 明确边界与后续顺序
+
+| 可以据此确认 | 尚不能据此声称 |
+|---|---|
+| 已冻结公式与实现一致，且有独立数值参考 | K_hat等于真实PPO几何或精确policy regret |
+| 固定L2惩罚BT存在唯一有限最优解 | 原无正则MLE理论自动适用于L2估计器 |
+| tiny OLMo2的模型接口/冻结链路通过 | 真实1B BF16/A100全部路径已经验收 |
+| 当前单预算iid抽边、每draw新标注语义正确 | 真实Judge满足BT或必然产生人类偏好改进 |
+| 未收敛设计会阻止标注 | 正式2048维特征必然在默认500次内收敛 |
+
+后续仍按既定顺序准备真实资产、运行模型预检、检查真实pool上的FW gap与数值条件，再开始收费标注；本次没有执行这些集群/真实模型任务，也没有消耗API额度。
+
+未来多预算时，当前`budget_coupling=independent`表示各预算重新独立标注；抽边RNG仍使用同一seed，因此query序列会共享前缀。它不影响本轮单预算，亦不违反当前“独立标注”约定；若后续要求跨预算独立抽边，届时应明确变更随机化协议，而不是现在默默换掉它。

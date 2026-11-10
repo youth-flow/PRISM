@@ -6,6 +6,8 @@ Prospective-Regret-Aware Preference Sampling for Reward Modeling in RLHF.
 
 当前第一版采用 **Empirical / PRISM、OLMo 1B、每方法每seed 1024标签、seeds 11/23**。唯一执行配置是 [configs/experiment.yaml](configs/experiment.yaml)，完整约定见 [第一版实验说明](docs/first-study.md)。H4 Design/PPO/test为3000/2000/500 prompts，每题4候选；评价为同源KL＋Direct Win Rate，以及官方IFEval。
 
+[核心算法审计](ALGORITHM_REVIEW.md)记录公式核对、独立数值对照、tiny OLMo2接口/冻结验证和本次contraction性能修复；不把这些检查冒称真实1B训练收益。
+
 ## 执行分层
 
 ```text

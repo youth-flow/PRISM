@@ -23,3 +23,11 @@
 - 官方checker测试依赖安装在隔离tmp/ifeval-test-deps，不写入研究结果或公开仓库。容器lock同步增加准确版本；langdetect在Python3下显式从固定版本sdist构建。
 - 本地pip check、Bash语法检查、config validate、跨工作目录scripts入口与计划计数通过。
 - 默认配置准确报告尚缺正式数据与资产；没有下载所选OLMo权重，没有调用真实Judge，没有提交盐城作业。运行镜像需重新构建，真实OLMo/A100、API账户可用性和CPU-only调度尚未验收。
+
+## PRISM核心算法复核 — 2026-11-10
+
+- 逐式核对原始流程A2–A5与当前已确认的固定L2调整，未发现核心数学定义、梯度符号、edge方向或冻结链路错误。详细证据见根目录`ALGORITHM_REVIEW.md`。
+- 两处三元einsum启用优化contraction，修正线搜索每次O(d²)注释；目标、特征、超参数和实验配置不变。小规模单线程kernel复测的数值差异约1e-15，不以kernel加速推断正式完整流程耗时。
+- 新增增广最小二乘、pairwise covariance恒等式、两边解析最优、away/drop、zero/rank-one K、独立SLSQP与未收敛阻断标注的回归检查。
+- 新增tiny随机OLMo2架构的EOS/logp独立对照和真实TRL更新/adapter重载，确认更新前后FrozenReward全部权重逐元素不变；另以n1024/d2048可分rank-one设计对照L2 BT精确一维最优条件。
+- 最新全套本地测试为 **82 passed, 1 skipped**；跳过项仍是Windows符号链接权限。没有加载真实1B checkpoint、调用收费API或运行GPU/集群作业。真实EOS数据的条件数和500次FW收敛性仍需后续预检。

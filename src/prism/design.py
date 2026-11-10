@@ -18,7 +18,7 @@ def proxy(phi, logp, ridge):
     b = cho_solve(cho_factor(X.T @ X + ridge * np.eye(X.shape[1])), X.T @ t)
     p = softmax(phi @ b, axis=1)
     centered = phi - np.einsum("ij,ijd->id", p, phi)[:, None, :]
-    K = np.einsum("ij,ijd,ije->de", p, centered, centered) / len(phi)
+    K = np.einsum("ij,ijd,ije->de", p, centered, centered, optimize=True) / len(phi)
     return b, p, (K + K.T) / 2
 
 
@@ -39,7 +39,7 @@ def objective_gradient(v, K, q, ridge):
     A = ridge * np.eye(v.shape[1]) + v.T @ (q[:, None] * v)
     inv = cho_solve(cho_factor(A), np.eye(len(A)))
     B = inv @ K @ inv
-    sensitivity = np.einsum("ij,jk,ik->i", v, B, v)
+    sensitivity = np.einsum("ij,jk,ik->i", v, B, v, optimize=True)
     return float(np.sum(K * inv.T)), -sensitivity
 
 
@@ -69,7 +69,8 @@ def frank_wolfe(v, K, initial, ridge, max_iter=500, relative_gap=1e-4):
         direction = -q.copy()
         direction[vertex] += 1
         # A(gamma)=(1-gamma)A + gamma*(ridge I + v_e v_e^T).
-        # Diagonalize A once: bounded line search then uses Sherman-Morrison O(d).
+        # Diagonalize A once. Sherman-Morrison avoids a fresh inverse, but the
+        # dense quadratic form a.T @ T @ a still costs O(d^2) per line evaluation.
         A = ridge * np.eye(v.shape[1]) + v.T @ (q[:, None] * v)
         eigen, U = np.linalg.eigh(A)
         z, T = U.T @ v[vertex], U.T @ K @ U
