@@ -16,7 +16,7 @@ def test_real_model_stages_and_evaluation_contract(tmp_path, monkeypatch):
     c["choices"]["sft"]["model"] = str(model_path)
     c["runtime"] = {"device": "cpu", "dtype": "float32", "local_files_only": True}
     c["candidate"]["max_new_tokens"] = c["evaluation"]["max_new_tokens"] = 4
-    c["ppo"].update(total_episodes=2, response_length=4, per_device_train_batch_size=2, gradient_accumulation_steps=1, num_ppo_epochs=1, lora_r=2, lora_alpha=4)
+    c["ppo"].update(total_episodes=2, response_length=4, per_device_train_batch_size=2, gradient_accumulation_steps=1, num_mini_batches=1, num_ppo_epochs=1, lora_r=2, lora_alpha=4)
     class SimulatedJudge:
         def __init__(self, c): pass
         def call(self, messages, a, b, seed, flip):

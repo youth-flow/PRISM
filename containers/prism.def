@@ -14,6 +14,7 @@ From: docker.io/pytorch/pytorch@sha256:2b59b1b91885677814f78be1f8df48a25d5dc952e
     src /opt/prism/src
     tests /opt/prism/tests
     configs /opt/prism/configs
+    scripts /opt/prism/scripts
 
 %post
     set -eu
@@ -22,7 +23,9 @@ From: docker.io/pytorch/pytorch@sha256:2b59b1b91885677814f78be1f8df48a25d5dc952e
     apt-get install -y --no-install-recommends ca-certificates git
     rm -rf /var/lib/apt/lists/*
     python -m pip install --no-cache-dir pip==24.3.1 setuptools==75.6.0 wheel==0.45.1
-    python -m pip install --no-cache-dir --only-binary=:all: --no-deps -r /opt/prism/containers/requirements.lock
+    # langdetect 1.0.9's published wheel is Python-2-only. Build its pure-Python
+    # sdist with pinned tools; keep every other package wheel-only.
+    python -m pip install --no-cache-dir --only-binary=:all: --no-binary=langdetect --no-deps --no-build-isolation -r /opt/prism/containers/requirements.lock
     python -m pip install --no-cache-dir --no-deps --no-build-isolation /opt/prism
     python -m pip check
 

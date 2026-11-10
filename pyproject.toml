@@ -12,6 +12,7 @@ dependencies = ["numpy>=1.26,<3", "scipy>=1.15,<1.16", "PyYAML>=6,<7"]
 [project.optional-dependencies]
 llm = ["torch>=2.7,<3", "transformers==4.52.3", "trl==0.15.2", "peft==0.15.2", "accelerate==1.7.0", "datasets==3.6.0"]
 test = ["pytest==8.3.5"]
+benchmark = ["absl-py==2.2.2", "langdetect==1.0.9", "nltk==3.9.1", "immutabledict==4.2.1"]
 
 [project.scripts]
 prism = "prism.cli:main"

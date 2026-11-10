@@ -65,17 +65,22 @@ bash scripts/yancheng/submit.sh --dry-run smoke
 
 `preflight.sh` 只查询目录、Git、磁盘、队列、账户和模块定义，不调用 `sbatch`、`srun`、容器或 Torch。
 
-后续填好四组实验选择、镜像验收完毕并决定开始实验后，才将 `PRISM_ALLOW_SUBMIT=1`，并依次执行：
+当前实验定义已收束到 `configs/experiment.yaml`。后续准备资产和数据、镜像验收完毕并决定开始实验后，才将 `PRISM_ALLOW_SUBMIT=1`，按配置生成的计划执行：
 
 ```text
-smoke -> validate --ready -> stage-assets -> model-smoke
+smoke -> stage-assets -> prepare-data -> validate --ready -> model-smoke
 rollout -> design
 每个 method/budget/seed: sample -> label -> reward -> policy
-                       -> evaluate-generate -> evaluate-judge
+evaluate-reference（共享SFT一次）
+全部单元 evaluate-generate -> 全部单元 evaluate-judge
 aggregate
 ```
 
 使用 `bash scripts/yancheng/submit.sh STAGE --config /online1/.../frozen.yaml ...`。GPU 阶段申请 `--gres=gpu:1`、1 node、1 task；CPU 阶段不申请 GPU。所有阶段都显式设置 account、partition、CPU、内存、时间、共享 working directory 和分开的日志。不会申请独占节点。当前配置只支持单进程单 GPU。
+
+资源由Python配置层计算：`python scripts/run.py resource --for-stage label --config ...`。API Judge返回cpu、本地HF Judge返回gpu；将结果通过wrapper的`--resource cpu|gpu`传入，例如`submit.sh --resource cpu label --config ...`。这样Bash不复制provider判断或解析YAML。默认提交开关仍关闭，`--dry-run`可以检查命令。
+
+API调用还需显式开启实验config里的`execution.allow_paid_api_calls`。密钥只引用环境变量，不进入config或日志。Apptainer cleanenv模式下，wrapper通过只读metadata命令获取当前角色配置的变量名，将任务环境中的普通密钥变量自动转发为`APPTAINERENV_<api_key_env>`，也支持预先设置前缀变量；不会把值放在`--env KEY=value`命令参数中。密钥应在仓库外的私有环境中提供。镜像增加官方IFEval依赖后需要重新构建，不能沿用旧依赖镜像冒称已验收。
 
 提交前要求源码 commit 已固定且工作区干净，配置在共享目录内，镜像 SHA256 正确。执行时再次核验，并把源码快照放到该作业目录。需要依赖时设置 `PRISM_DEPENDENCY=<job_id>`，下一次提交使用 `afterok`，用完清除。每次只提交已准备好的必要阶段。
 

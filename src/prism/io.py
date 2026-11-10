@@ -41,8 +41,19 @@ def write_rows(path, values):
 def load_config(path, ready=False):
     path = Path(path).resolve()
     c = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if c["schema_version"] != 1 or c["methods"] != list(METHODS):
-        raise ValueError("Expected schema 1 and exactly empirical, a_optimal, prism in that order")
+    if c.get("schema_version") == 2:
+        from .config import load_v2
+        return load_v2(path, c, ready=ready)
+    if c["schema_version"] != 1:
+        raise ValueError("Expected schema 1")
+    methods = c["methods"]
+    if not methods or len(set(methods)) != len(methods) or any(m not in METHODS for m in methods):
+        raise ValueError("methods must be a nonempty subset of empirical, a_optimal, prism without duplicates")
+    if c.get("sampling", {}).get("budget_coupling", "independent") not in ("independent", "nested_prefix"):
+        raise ValueError("sampling.budget_coupling must be independent or nested_prefix")
+    l2 = c["reward"].get("l2_regularization", 0.0)
+    if not isinstance(l2, (int, float)) or not np.isfinite(l2) or l2 < 0:
+        raise ValueError("reward.l2_regularization must be finite and nonnegative")
     for group in ("budgets", "seeds"):
         if not c[group] or len(set(c[group])) != len(c[group]) or any(type(v) is not int or v < (1 if group == "budgets" else 0) for v in c[group]):
             raise ValueError(f"Invalid {group}")
@@ -102,6 +113,9 @@ def prompt_rows(path):
 
 
 def validate_prompts(c):
+    if c.get("schema_version") == 2:
+        from .config import validate_v2_inputs
+        return validate_v2_inputs(c)
     ps = {k: prompt_rows(p) for k, p in c["choices"]["prompts"].items()}
     bench = prompt_rows(c["choices"]["benchmark"]["path"])
     if any(not isinstance(r.get("answer"), str) for r in bench):
@@ -120,6 +134,13 @@ def root(c):
     contract = {"config": c, "input_sha256": {}}
     for f in list(c["choices"]["prompts"].values()) + [c["choices"]["benchmark"]["path"]]:
         contract["input_sha256"][f] = digest(f)
+    extra = [c.get("data", {}).get("manifest_path")]
+    source = c["choices"]["benchmark"].get("official_source_path")
+    if source:
+        extra.append(str(Path(source) / "source-manifest.json"))
+    for f in extra:
+        if f and Path(f).is_file():
+            contract["input_sha256"][f] = digest(f)
     manifest = p / "experiment.json"
     if manifest.exists():
         if json.loads(manifest.read_text(encoding="utf-8")) != contract:
@@ -130,7 +151,7 @@ def root(c):
 
 
 def cell(c, method, budget, seed):
-    if method not in METHODS or budget not in c["budgets"] or seed not in c["seeds"]:
+    if method not in c["methods"] or budget not in c["budgets"] or seed not in c["seeds"]:
         raise ValueError("Cell not declared in experiment config")
     p = root(c) / method / f"n{budget}" / f"seed{seed}"
     p.mkdir(parents=True, exist_ok=True)

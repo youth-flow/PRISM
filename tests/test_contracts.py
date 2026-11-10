@@ -11,7 +11,7 @@ from prism.io import dump, load_config, receipt, root, rows, verify_receipt, wri
 
 
 def fixture_config(tmp_path):
-    c = yaml.safe_load((Path(__file__).parents[1]/"configs/experiment.yaml").read_text(encoding="utf-8"))
+    c = yaml.safe_load((Path(__file__).parents[1]/"configs/hf.example.yaml").read_text(encoding="utf-8"))
     for key in c["choices"]["prompts"]:
         path = tmp_path / f"{key}.jsonl"
         write_rows(path, [{"id": f"{key}-{i}", "messages": [{"role": "user", "content": f"{key} question {i}"}]} for i in range(8)])
@@ -23,15 +23,18 @@ def fixture_config(tmp_path):
         c["choices"][key] = {"model": "test-only-local", "revision": "0"*40}
     c["output"] = str(tmp_path / "run")
     c["budgets"], c["seeds"] = [1000], [7]
+    # Exercise the full legacy registry independently of the smaller current study.
+    c["methods"] = ["empirical", "a_optimal", "prism"]
+    c["sampling"] = {"budget_coupling": "independent"}
     c["design"]["fw_relative_gap"] = 0.01
     c["design"]["fw_max_iter"] = 2000
     return c
 
 
 def test_missing_choices_and_overlap(tmp_path):
-    source = Path(__file__).parents[1]/"configs/experiment.yaml"
+    source = Path(__file__).parents[1]/"configs/hf.example.yaml"
     _, missing = load_config(source)
-    assert len(missing) == 9
+    assert len(missing) == 7  # The selected OLMo SFT and revision are now filled.
     with pytest.raises(ValueError, match="Fill experiment"):
         load_config(source, ready=True)
     c = fixture_config(tmp_path)

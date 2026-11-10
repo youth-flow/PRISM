@@ -4,12 +4,37 @@ prism_die() { echo "PRISM: $*" >&2; exit 2; }
 # Login nodes currently provide Git 1.8.3.1, predating git -C.
 prism_git() { (cd "$PRISM_REPO" && git "$@"); }
 
+prism_forward_api_envs() {
+  # Names come from the validated config. Values remain in the process
+  # environment, never Apptainer command-line flags or output.
+  local name target
+  for name in "$@"; do
+    [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || prism_die "Invalid API environment variable name"
+    target="APPTAINERENV_${name}"
+    if [[ -v "$name" ]]; then
+      export "$target=${!name}"
+    elif [[ ! -v "$target" ]]; then
+      prism_die "Missing API environment variable: $name"
+    fi
+  done
+}
+
 prism_stage_gpu() {
+  local gpu=0
   case "$1" in
-    smoke|model-smoke|rollout|label|policy|evaluate-generate|evaluate-judge) return 0 ;;
-    stage-assets|design|sample|reward|aggregate|validate) return 1 ;;
+    smoke|model-smoke|rollout|label|policy|evaluate-reference|evaluate-generate|evaluate-judge) gpu=1 ;;
+    stage-assets|prepare-data|design|sample|reward|aggregate|validate) gpu=0 ;;
     *) prism_die "Unknown stage: $1" ;;
   esac
+  # The Python config/backend layer computes resource needs. Bash receives that
+  # result explicitly instead of duplicating provider-specific YAML parsing.
+  case "${PRISM_STAGE_RESOURCE:-}" in
+    gpu) gpu=1 ;;
+    cpu) gpu=0 ;;
+    "") ;;
+    *) prism_die "Stage resource must be cpu or gpu" ;;
+  esac
+  [[ "$gpu" == 1 ]]
 }
 
 prism_path_under() {

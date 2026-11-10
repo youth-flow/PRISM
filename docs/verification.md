@@ -13,3 +13,13 @@
 运行时 SIF 尚待首次构建/上传和驱动兼容验收；CPU-only 阶段在当前授权 GPU partition 中能否被接受也尚待平台确认。上述检查不等于正式实验已可放行。
 
 源资料包含私人凭证，`计算服务/`、`local/` 与 `tmp/` 已排除 Git。部署记录与本次本机网络诊断保存在本地 `local/`，不随公开代码发布。
+
+## 小规模配置与通用执行接口 — 2026-11-10
+
+- 默认schema2配置：Empirical/PRISM、seeds11/23、单预算1024、OLMo1B；plan实际计算出4个训练单元、4096个有效标签、6000次AB/BA评价、2705次IFEval生成。
+- 全套本地测试：**75 passed, 1 skipped**。跳过项仍为Windows符号链接权限；微型CPU PPO与adapter重载保持通过。
+- DeepSeek/OpenAI协议、付费开关、错误与usage、TIE/位置还原、断点恢复使用模拟HTTP验证，没有真实API调用。新增评价测试使用保存的合成产物与模拟生成，不冒称真实OLMo效果。容器密钥按config指定变量名安全转发，专项测试仅使用虚构测试值。
+- 真正的官方IFEval源码（e6890f85757dd84e27ca6df2dd30651dafad28e0）与punkt/punkt_tab已在隔离tmp目录用于checker验收，测试得到四项正确分母和strict/loose差异；正式data/assets目录没有因此被冒充准备完成。
+- 官方checker测试依赖安装在隔离tmp/ifeval-test-deps，不写入研究结果或公开仓库。容器lock同步增加准确版本；langdetect在Python3下显式从固定版本sdist构建。
+- 本地pip check、Bash语法检查、config validate、跨工作目录scripts入口与计划计数通过。
+- 默认配置准确报告尚缺正式数据与资产；没有下载所选OLMo权重，没有调用真实Judge，没有提交盐城作业。运行镜像需重新构建，真实OLMo/A100、API账户可用性和CPU-only调度尚未验收。

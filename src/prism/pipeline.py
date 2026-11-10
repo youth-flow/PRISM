@@ -44,6 +44,8 @@ def design(c):
     q0 = empirical(index)
     distributions, reports = {"empirical": q0}, {}
     for method, target in (("a_optimal", np.eye(v.shape[1])), ("prism", K)):
+        if method not in c["methods"]:
+            continue
         print(f"design {method}: {len(v)} edges, dimension {v.shape[1]}", flush=True)
         q, report = frank_wolfe(v, target, q0, c["design"]["matrix_ridge"], c["design"]["fw_max_iter"], c["design"]["fw_relative_gap"])
         distributions[method], reports[method] = q, report
@@ -67,11 +69,20 @@ def sample(c, method, budget, seed):
     rng = np.random.default_rng(seed)
     draws = rng.choice(len(q), size=budget, replace=True, p=q)
     write_rows(out / "queries.jsonl", [{"draw_id": k, "edge_id": int(e), "prompt_index": int(index[e, 0]), "a": int(index[e, 1]), "b": int(index[e, 2]), "probability": float(q[e])} for k, e in enumerate(draws)])
-    receipt(out / "queries.receipt.json", [out / "queries.jsonl", p / "design.receipt.json"], iid_with_replacement=True, budget=budget, unique_edges=len(set(draws.tolist())))
+    receipt(out / "queries.receipt.json", [out / "queries.jsonl", p / "design.receipt.json"], iid_with_replacement=True, budget=budget, unique_edges=len(set(draws.tolist())), budget_coupling=c.get("sampling", {}).get("budget_coupling", "independent"))
+
+
+def _freeze_rows(path, data):
+    """Allow recovery after a snapshot was written but its receipt was not."""
+    if path.exists():
+        if rows(path) != data:
+            raise ValueError(f"Immutable label snapshot changed: {path}")
+    else:
+        write_rows(path, data)
 
 
 def label(c, method, budget, seed):
-    from .hf import Judge
+    from .judges import judge_settings, make_judge
     p, out = root(c), cell(c, method, budget, seed)
     verify_receipt(p / "pool.receipt.json")
     verify_receipt(p / "design.receipt.json")
@@ -81,20 +92,34 @@ def label(c, method, budget, seed):
         return
     queries = rows(out / "queries.jsonl")
     pool = {(r["prompt_index"], r["candidate"]): r for r in rows(p / "pool.jsonl")}
-    calls = out / "judge_calls.jsonl"
+    coupling = c.get("sampling", {}).get("budget_coupling", "independent")
+    calls = (p / "label_streams" / method / f"seed{seed}" / "judge_calls.jsonl"
+             if coupling == "nested_prefix" else out / "judge_calls.jsonl")
+    calls.parent.mkdir(parents=True, exist_ok=True)
     previous = rows(calls) if calls.exists() else []
+    initial_call_count = len(previous)
+    expected = {q["draw_id"]: q for q in queries}
+    for r in previous:
+        if r["draw_id"] in expected and any(r.get(key) != val for key, val in expected[r["draw_id"]].items()):
+            raise ValueError("Shared label stream does not match the sampled query prefix")
     completed = {r["draw_id"]: r for r in previous if r["label"] is not None}
-    judge = Judge(c)
+    judge = None
     for query in queries:
         k = query["draw_id"]
         if k in completed:
             continue
         a, b = pool[(query["prompt_index"], query["a"])], pool[(query["prompt_index"], query["b"])]
         attempts = sum(r["draw_id"] == k for r in previous)
-        for attempt in range(attempts, c["judge"]["max_attempts"]):
-            # Different methods/budgets have separate calls; never reuse an edge label.
-            call_seed = int(np.random.SeedSequence([seed, budget, METHODS.index(method), k, attempt, 991]).generate_state(1)[0])
+        for attempt in range(attempts, judge_settings(c, "training")["max_attempts"]):
+            # Prefix budgets share the SAME observation. Distinct draw IDs, even
+            # for a repeated edge, always receive separate calls.
+            seed_parts = [seed, METHODS.index(method), k, attempt, 991]
+            if coupling == "independent":
+                seed_parts.insert(1, budget)
+            call_seed = int(np.random.SeedSequence(seed_parts).generate_state(1)[0])
             flip = bool(np.random.default_rng(call_seed).integers(2))
+            if judge is None:
+                judge = make_judge(c, "training")
             result = {**query, "attempt": attempt, **judge.call(a["messages"], a["response"], b["response"], call_seed, flip)}
             with calls.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -105,12 +130,17 @@ def label(c, method, budget, seed):
                 break
         if k not in completed:
             raise RuntimeError(f"Judge format failure at draw {k}; attempts logged. No substituted label.")
-        if len(completed) % max(1, budget // 20) == 0 or len(completed) == budget:
-            print(f"label {len(completed)}/{budget}", flush=True)
-    if len(completed) != budget:
+        count = sum(k in completed for k in expected)
+        if count % max(1, budget // 20) == 0 or count == budget:
+            print(f"label {count}/{budget}", flush=True)
+    if any(k not in completed for k in expected):
         raise RuntimeError("Label count mismatch")
-    write_rows(out / "labels.jsonl", [completed[k] for k in range(budget)])
-    receipt(out / "labels.receipt.json", [out / "labels.jsonl", calls, out / "queries.receipt.json"], valid_labels=budget, actual_judge_calls=len(previous), invalid_calls=sum(r["label"] is None for r in previous))
+    prefix_calls = [r for r in previous if r["draw_id"] in expected]
+    snapshot = out / "judge_calls.jsonl"
+    if coupling == "nested_prefix":
+        _freeze_rows(snapshot, prefix_calls)
+    _freeze_rows(out / "labels.jsonl", [completed[k] for k in range(budget)])
+    receipt(out / "labels.receipt.json", [out / "labels.jsonl", snapshot, out / "queries.receipt.json"], valid_labels=budget, actual_judge_calls=len(prefix_calls), invalid_calls=sum(r["label"] is None for r in prefix_calls), budget_coupling=coupling, source_call_stream=str(calls), incremental_calls_this_invocation=len(previous)-initial_call_count)
 
 
 def reward(c, method, budget, seed):
@@ -147,12 +177,26 @@ def policy(c, method, budget, seed):
 
 def stage_assets(c):
     from huggingface_hub import snapshot_download
-    for role in ("sft", "judge"):
-        d = c["choices"][role]
+    assets = [("sft", c["choices"]["sft"])]
+    if c.get("schema_version") == 2:
+        assets.extend((f"{role}_judge", settings) for role, settings in c["judges"].items() if settings["backend"] == "hf")
+    else:
+        assets.append(("judge", c["choices"]["judge"]))
+    for role, d in assets:
         if Path(d["model"]).is_dir():
             print(f"Using supplied local {role} snapshot: {d['model']}")
         else:
             print(snapshot_download(d["model"], revision=d["revision"], ignore_patterns=["*.bin", "*.h5", "*.msgpack", "*.onnx", "*.tflite", "*.gguf"]))
+    if c["choices"]["benchmark"].get("kind") == "ifeval":
+        from .benchmarks import stage_ifeval_resources, stage_ifeval_sources
+        b = c["choices"]["benchmark"]
+        stage_ifeval_sources(b["official_source_path"], b["official_source_revision"])
+        stage_ifeval_resources(c)
+
+
+def prepare_data(c):
+    from .data import prepare_data as prepare
+    return prepare(c)
 
 
 def model_smoke(c):
@@ -160,7 +204,8 @@ def model_smoke(c):
     import gc
     import torch
     from trl.trainer.utils import get_reward
-    from .hf import FrozenReward, Judge, generate, load_lm, prompt_ids, sequence_stats, tokenizer
+    from .hf import FrozenReward, generate, load_lm, prompt_ids, sequence_stats, tokenizer
+    from .judges import judge_settings, make_judge
     p = root(c)
     fresh(p / "model-smoke.json")
     t, m = tokenizer(c), load_lm(c)
@@ -187,9 +232,12 @@ def model_smoke(c):
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    judge = Judge(c)
+    if c.get("schema_version") == 2:
+        dump(p / "model-smoke.json", {"eos_adapter_errors": errors, "sequence_logps": logps, "passed": True, "judge_calls": [], "note": "GPU feature preflight only; no API Judge is invoked by model-smoke."})
+        return
+    judge = make_judge(c, "training")
     attempts = []
-    for attempt in range(c["judge"]["max_attempts"]):
+    for attempt in range(judge_settings(c, "training")["max_attempts"]):
         answer = judge.call(r["messages"], texts[0], texts[1], 1234+attempt, bool(attempt % 2))
         attempts.append(answer)
         dump(p / "model-smoke.json", {"eos_adapter_errors": errors, "sequence_logps": logps, "judge_calls": attempts, "passed": answer["label"] is not None})

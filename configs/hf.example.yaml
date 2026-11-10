@@ -1,0 +1,68 @@
+# Runtime skeleton for the small first study. API Judges/IFEval are still pending:
+# this is NOT launch-ready; null legacy Judge/benchmark choices intentionally block it.
+schema_version: 1
+output: ../runs/main
+choices:
+  prompts:
+    design: null       # JSONL: {id, messages:[{role,content}]}
+    policy: null       # Same format; v1 uses 2000 prompts disjoint from design.
+    evaluation: null
+  sft:
+    model: allenai/OLMo-2-0425-1B-SFT
+    revision: 0d85a3d037876ce6ac7d4311d994400fc66ac27f
+  judge:
+    model: null        # Text-generation HF model, fixed across all methods
+    revision: null
+  benchmark:
+    path: null         # JSONL: {id,messages,answer}; frozen exact-match benchmark
+    name: null
+methods: [empirical, prism]
+budgets: [256, 512, 1024]
+seeds: [11, 23]
+sampling:
+  budget_coupling: nested_prefix # Same draw observations reused across n, not across draw IDs
+runtime:
+  device: cuda
+  dtype: bfloat16
+  local_files_only: true
+candidate:
+  count: 4
+  max_new_tokens: 512
+  max_prompt_tokens: 1024
+  seed: 20261102
+design:
+  surrogate_ridge: 0.01
+  matrix_ridge: 0.01
+  fw_max_iter: 500
+  fw_relative_gap: 0.0001
+reward:
+  l2_regularization: 0.01 # mean BT loss + (lambda_RM/2)||w||^2; explicitly approved
+  max_iter: 2000
+  gradient_tolerance: 0.000001
+  max_weight_norm: 1000.0 # Failure diagnostic only; NOT a norm constraint or penalty
+judge:
+  max_new_tokens: 32
+  temperature: 1.0
+  max_attempts: 3
+ppo:
+  total_episodes: 4096
+  response_length: 512
+  learning_rate: 0.000003
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 16
+  num_mini_batches: 2
+  num_ppo_epochs: 2
+  local_rollout_forward_batch_size: 4
+  kl_coef: 0.05
+  cliprange: 0.2
+  vf_coef: 0.1
+  cliprange_value: 0.2
+  gamma: 1.0
+  lam: 0.95
+  max_grad_norm: 1.0
+  lora_r: 8
+  lora_alpha: 16
+  lora_target_modules: all-linear
+evaluation:
+  max_new_tokens: 512
+  seed: 314159

@@ -13,6 +13,9 @@ def exact_match(response, answer):
 
 
 def evaluate_generate(c, method, budget, seed):
+    if c.get("schema_version") == 2:
+        from .evaluation_v2 import evaluate_generate as generate
+        return generate(c, method, budget, seed)
     import torch
     from peft import PeftModel
     from .hf import generate, load_lm, prompt_ids, sequence_stats, tokenizer
@@ -50,6 +53,9 @@ def evaluate_generate(c, method, budget, seed):
 
 
 def evaluate_judge(c, method, budget, seed):
+    if c.get("schema_version") == 2:
+        from .evaluation_v2 import evaluate_judge as judge
+        return judge(c, method, budget, seed)
     from .hf import Judge
     out = cell(c, method, budget, seed)
     verify_receipt(out / "evaluation.generate.receipt.json")
@@ -89,10 +95,13 @@ def evaluate_judge(c, method, budget, seed):
 
 
 def aggregate(c):
+    if c.get("schema_version") == 2:
+        from .evaluation_v2 import aggregate as collect
+        return collect(c)
     import csv
     p = root(c)
     data, missing = [], []
-    for method in METHODS:
+    for method in c["methods"]:
         for n in c["budgets"]:
             for seed in c["seeds"]:
                 out = cell(c, method, n, seed)
@@ -107,7 +116,7 @@ def aggregate(c):
             writer.writeheader()
             writer.writerows(data)
     groups = []
-    for method in METHODS:
+    for method in c["methods"]:
         for n in c["budgets"]:
             group = [r for r in data if r["method"] == method and r["budget"] == n]
             if not group:
@@ -118,5 +127,9 @@ def aggregate(c):
                 g[metric + "_mean"] = float(values.mean())
                 g[metric + "_seed_std"] = float(values.std(ddof=1)) if len(values)>1 else None
             groups.append(g)
-    dump(p / "summary.json", {"complete": not missing, "missing_cells": missing, "groups": groups, "note": "Seed variability and per-prompt uncertainty are separate; MC KL may be negative at finite sample size."})
+    accounting = {"budget_coupling": c.get("sampling", {}).get("budget_coupling", "independent")}
+    if accounting["budget_coupling"] == "nested_prefix":
+        streams = [rows(f) for f in (p / "label_streams").glob("*/seed*/judge_calls.jsonl")]
+        accounting.update(unique_training_calls=sum(map(len, streams)), unique_valid_observations=sum(len({r["draw_id"] for r in stream if r["label"] is not None}) for stream in streams))
+    dump(p / "summary.json", {"complete": not missing, "missing_cells": missing, "groups": groups, "training_label_accounting": accounting, "note": "Seed variability and per-prompt uncertainty are separate; MC KL may be negative at finite sample size. Nested-prefix cell label counts must not be summed as distinct purchases."})
     return {"completed": len(data), "missing": len(missing), "output": str(p / "summary.json")}

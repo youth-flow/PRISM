@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 
 import pytest
@@ -45,6 +46,11 @@ def test_gpu_cpu_routing_and_dependency(platform):
     assert cpu.returncode == 0, cpu.stderr
     assert "--gres" not in cpu.stdout and "afterok:123" in cpu.stdout
     assert not (Path(repo).parent/"logs").exists()  # dry-run has no setup side effects
+    api = run("--dry-run", "--resource", "cpu", "label", "--config", shell_path(cfg))
+    assert api.returncode == 0, api.stderr
+    assert "--gres" not in api.stdout
+    local_judge = run("--dry-run", "--resource", "gpu", "evaluate-judge", "--config", shell_path(cfg))
+    assert local_judge.returncode == 0 and "--gres=gpu:1" in local_judge.stdout
 
 
 def test_no_actual_submission_or_storage_escape(platform):
@@ -71,3 +77,15 @@ def test_symlink_escape(platform, tmp_path):
         pytest.skip("Symlink privilege unavailable")
     result = run("--dry-run", "smoke", overrides={"PRISM_WORK": shell_path(link, resolve=False)})
     assert result.returncode != 0
+
+
+def test_container_api_environment_forwarding_uses_names_without_printing_values(platform):
+    _, _, repo, env = platform
+    bash = str(Path(shutil.which("git")).parents[1]/"bin/bash.exe") if os.name == "nt" else shutil.which("bash")
+    source = shlex.quote(shell_path(repo/"scripts/yancheng/common.sh"))
+    script = f"source {source}\nprism_forward_api_envs TEST_JUDGE_KEY\n[[ $APPTAINERENV_TEST_JUDGE_KEY == fixture-only-key ]]\nprintf passed"
+    result = subprocess.run([bash, "-c", script], env={**env, "TEST_JUDGE_KEY": "fixture-only-key"}, capture_output=True, text=True)
+    assert result.returncode == 0 and result.stdout == "passed"
+    assert "fixture-only-key" not in result.stdout + result.stderr
+    missing = subprocess.run([bash, "-c", f"source {source}\nprism_forward_api_envs PRISM_MISSING_TEST_KEY"], env=env, capture_output=True, text=True)
+    assert missing.returncode != 0 and "Missing API environment variable" in missing.stderr

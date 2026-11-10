@@ -37,12 +37,24 @@ if [[ "$gpu" == 1 ]]; then
 else
   [[ "$SLURM_JOB_PARTITION" == "$PRISM_CPU_PARTITION" ]] || prism_die "Unexpected CPU partition"
 fi
-if [[ "$stage" == stage-assets ]]; then
+if [[ "$stage" == stage-assets || "$stage" == prepare-data ]]; then
   opts+=(--env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0)
 else
   opts+=(--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1)
 fi
 runner=(apptainer exec "${opts[@]}" "$PRISM_IMAGE")
+
+if [[ "$stage" == label || "$stage" == evaluate-judge ]]; then
+  role=training
+  [[ "$stage" != evaluate-judge ]] || role=evaluation
+  # Query names in the clean container without keys or model loading. Forward
+  # only the role's configured key through Apptainer's environment mechanism.
+  api_env_names="$("${runner[@]}" python -m prism.cli api-env-names --config "$PRISM_CONFIG_PATH" --judge-role "$role")"
+  if [[ -n "$api_env_names" ]]; then
+    read -r -a api_envs <<< "$api_env_names"
+    prism_forward_api_envs "${api_envs[@]}"
+  fi
+fi
 echo "stage=$stage commit=$PRISM_COMMIT image=$PRISM_IMAGE_SHA256 job=$SLURM_JOB_ID"
 if [[ "$stage" == smoke ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py

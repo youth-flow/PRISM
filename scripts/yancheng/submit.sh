@@ -3,7 +3,16 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 dry=0
-if [[ "${1:-}" == --dry-run ]]; then dry=1; shift; fi
+resource="${PRISM_STAGE_RESOURCE:-}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) dry=1; shift ;;
+    --resource) resource="${2:?Supply cpu or gpu}"; shift 2 ;;
+    *) break ;;
+  esac
+done
+[[ -z "$resource" || "$resource" == cpu || "$resource" == gpu ]] || prism_die "Resource must be cpu or gpu"
+export PRISM_STAGE_RESOURCE="$resource"
 stage="${1:?Supply a stage}"; shift
 if prism_stage_gpu "$stage"; then gpu=1; else gpu=0; fi
 prism_check_paths

@@ -1,6 +1,6 @@
 # PRISM v1：数学与代码契约
 
-依据 `实验流程.pdf`；当前用户要求将 PDF 中四方法比较收缩为 empirical、A-optimal、PRISM 三种。实现不引入旧 ProRM 的替代损失、NLHF、DPO 或额外辅助模型。
+依据 `实验流程.pdf`；2026-11-10 第一版配置收缩为 empirical、PRISM 两种、单预算1024、两个seed。A-optimal保留为可选实现但本轮不运行。当前执行参数以 `configs/experiment.yaml` 为准，完整执行说明见 `docs/first-study.md`。实现不引入NLHF、DPO或额外辅助logit模型。
 
 ## A. 先用无标签池设计分布
 
@@ -37,22 +37,22 @@ empirical 是先均匀抽 empirical prompt、再均匀抽该 prompt 的 pair。�
 
 梯度：`g_e = -v_eᵀ A^{-1} K A^{-1} v_e`。FW 最优性间隙 `qᵀg-min_e g_e`；**有阻尼时不能误写成 max sensitivity-f(q)**。实现 away-step Frank–Wolfe，在相同 simplex 上优化，并用 Cholesky / 特征分解与 rank-one 公式做线搜索。没有覆盖约束、uniform mixture、强制每条边至少一次等额外机制。所有 q 设计完成并达 gap 阈值后才允许标注。
 
-三个不同参数：alpha 是拟合 b 的 ridge；lambda 是设计矩阵阻尼；beta 是下游 KL 系数。它们不是同一个正则参数。
+四个不同参数：alpha 是拟合 b 的 ridge；lambda_design 是设计矩阵阻尼；lambda_RM 是 reward 头固定 L2；beta 是下游 KL 系数。它们不是同一个正则参数。
 
 ## B. 分布决定获取哪些新标签
 
-各单元独立抽 `e_k iid ~ q_method, k=1,...,n`，有放回。重复 edge 是不同 draw，重新调用 Judge；绝不把一次标签复制多份当作新证据。随机交换 A/B 展示顺序并还原到 canonical 标签。
+当前每个方法/seed在单预算下抽 `e_k iid ~ q_method, k=1,...,n`，有放回。未来多预算时可配置独立标注或同一观测序列的nested_prefix，不能把前缀复用冒称新标签。重复 edge 是不同 draw，重新调用 Judge；绝不把一次标签复制多份当作新证据。随机交换 A/B 展示顺序并还原到 canonical 标签。
 
-现有实现中人工 oracle 由固定 LLM Judge 代替，温度固定为 1，独立随机种子产生随机标签。该实现条件本身不证明 Judge 符合 BT；BT 是 reward 阶段的建模假设。
+人工oracle由固定训练Judge代替。本版DeepSeek非thinking、T=1，每个draw新调用；API客户端seed控制抽样和展示顺序，不保证供应商采样完全复现。LLM Judge不被假定等于真实人类oracle，其输出也没有被实现证明符合BT；BT是reward阶段的建模假设。评价使用独立Judge角色。
 
 每条有效二元标签计入 n；无效格式会记录并有限次重试。因此同时报告 `valid_labels` 与 `actual_judge_calls`；比较真实标注成本应以实际 calls 为横轴。没有标签的失败请求不伪造 a=0。评价的额外 calls 与训练标签预算分开报告。
 
 \[
 \hat w\approx\arg\min_w \frac1n\sum_k
-\left[\log(1+\exp(v_{e_k}^T w))-a_k v_{e_k}^T w\right].
+\left[\log(1+\exp(v_{e_k}^T w))-a_k v_{e_k}^T w\right]+\frac{\lambda_{\rm RM}}2\|w\|^2.
 \]
 
-用 float64 L-BFGS，数值稳定 `logaddexp`，零初始化，固定求解设置。无伪 logit、辅助概率模型、重要性权重、额外 L2、每方法 reward 归一化。理论里的 argmin 与有限步数值拟合区分：梯度/权重范数/迭代数记入报告；可分数据未必存在有限 MLE，梯度小不证明有限 MLE 存在。`max_weight_norm` 只用于报错，不作为约束优化或 clipping。
+用 float64 L-BFGS，数值稳定 `logaddexp`，零初始化，固定求解设置。无伪logit、辅助概率模型、重要性权重或逐方法reward归一化。用户已明确接受固定L2，本版lambda_RM=0.01，对均值损失加惩罚，所有方法/预算一致。正L2保证惩罚目标存在有限唯一最优解，但不是无正则MLE；理论argmin与有限步数值拟合仍区分，梯度/范数/迭代数记入报告。旧无正则入口仍可配置为0；此时可分数据未必存在有限MLE。`max_weight_norm` 只用于报错，不作为约束优化或 clipping。
 
 ## C. 一致的下游优化与评估
 
@@ -62,10 +62,10 @@ empirical 是先均匀抽 empirical prompt、再均匀抽该 prompt 的 pair。�
 
 TRL 0.15.2 的兼容细节：rollout 内部先生成到统一长度，再用保留的 EOS stop ID 截断奖励并屏蔽 EOS 后的 token。这避免 variable-length padding ID 在该版本的 log-prob gather 中越界；EOS 之前生成分布保持不变。不会把 EOS 后的隐藏状态当作 EOS feature。reserved padding 位于模型词表之外且从不用于真实模型输入，因此不 resize SFT embedding、不改变 reference 分布。
 
-heldout prompts 上，actor 与 SFT reference 各生成响应，固定 Judge 给出二元胜率；随机展示顺序。KL 是 actor 温度 1 样本上的 `log pi(y|x)-log pi_0(y|x)` 序列均值及标准误，不截断负估计值，不把 token 平均冒称序列 KL。报告长度以排查长度偏差。
+同源heldout上各policy各生成一次回答，SFT reference回答共享缓存一次；独立评价Judge对配置的跨方法/SFT比较按AB/BA两种顺序评审，允许TIE并按半胜计分，两个顺序还原后取均值。KL 是 actor 温度 1 样本上的 `log pi(y|x)-log pi_0(y|x)` 序列均值及标准误，不截断负估计值，不把 token 平均冒称序列 KL。报告长度以排查长度偏差。
 
-`benchmark` 的 v1 适配器为 normalized exact-match：去首尾空白、casefold、折叠空白，贪心生成。具体 benchmark 如果要求多选 likelihood、专用数学判题、代码执行或官方 AlpacaEval 等，需要选定后用其官方协议接入，不能仅换名称。
+schema2的IFEval使用固定官方Google checker源码与显式准备的NLTK资源，独立greedy生成上限2048，报告四项官方指标。schema1/可选exact-match适配器仍保留，但不能冒称IFEval。新增benchmark需增加对应适配器，不仅更改名称。
 
 ## 解释边界
 
-K_hat 是 loglinear proxy 几何，不是实际 PPO/LoRA Hessian 的精确测量。测试证明的是实现与这些公式/接口的一致性，不证明 LLM Judge 满足 BT、不证明全局 policy regret 或标签节约。三方法共享设置是公平对照的起点，最终结论由独立评测决定。
+K_hat 是 loglinear proxy 几何，不是实际 PPO/LoRA Hessian 的精确测量。测试证明的是实现与这些公式/接口的一致性，不证明 LLM Judge 满足 BT、不证明全局 policy regret 或标签节约。各方法共享设置是公平对照的起点，最终结论由独立评测决定。
