@@ -34,6 +34,10 @@ python -m venv .venv
 
 `validate`和`plan`不加载模型、不收费、不提交作业。默认配置会明确报告未准备的数据/资源；不能把结构通过当成GPU验收。第一版计划为4个PPO训练单元、4096个有效训练标签、6000次双顺序API评审、2705次IFEval生成。
 
+`plan`给出按依赖顺序排列的阶段清单和资源分类；它不是自动执行器或Slurm调度器。后续按清单使用统一阶段入口执行，或通过盐城wrapper逐阶段提交。
+
+完整CLI集成测试使用本地tiny OLMo2、真实TRL PPO和官方IFEval，仅数据下载与Judge请求使用模拟接口。运行该测试需将`PRISM_TEST_IFEVAL_SOURCE`和`PRISM_TEST_NLTK_DATA`指向显式准备的官方源码与资源；未提供时跳过，不自动下载。
+
 ## 阶段入口
 
 统一形式：
@@ -43,6 +47,8 @@ python scripts/run.py <stage> --config /absolute/path/to/experiment.yaml
 ```
 
 共享准备：`stage-assets → prepare-data → validate --ready → model-smoke → rollout → design`。
+
+当前`prepare-data`适配H4样式的prompt/ID列和IFEval官方记录格式；配置提供完整数据源、split、字段名、划分seed和context元数据时，计划才加入此阶段。已准备好的JSONL可直接由config引用；`exact_match`配置复用已有文件，不进入IFEval数据准备。新增数据格式或benchmark需要在`src`增加适配器。
 
 每个配置单元：`sample → label → reward → policy`，传入`--method`、`--budget`、`--seed`。例如本版单元为`--method prism --budget 1024 --seed 11`。
 

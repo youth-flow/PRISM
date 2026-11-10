@@ -12,13 +12,29 @@ def stage_resource(c, stage):
     raise ValueError(f"Unknown experiment stage: {stage}")
 
 
+def _has_automatic_data_preparation(c):
+    """Recognize the prompt-column/IFEval adapter's required source metadata.
+
+    Other configurations may supply already prepared JSONL inputs. In particular,
+    exact-match evaluation does not use the IFEval-specific preparation adapter.
+    """
+    if c.get("schema_version") != 2 or c["choices"]["benchmark"]["kind"] != "ifeval":
+        return False
+    data = c.get("data", {})
+    source_fields = ("id", "revision", "train_split", "test_split", "prompt_field", "id_field")
+    benchmark_fields = ("id", "revision", "split")
+    return (all(key in data.get("source", {}) for key in source_fields)
+            and all(key in data.get("benchmark_source", {}) for key in benchmark_fields)
+            and all(key in data for key in ("model_context_tokens", "split_seed")))
+
+
 def stage_plan(c):
     """Order shared preparation, all generation, then matched comparisons."""
     stages = []
     def add(stage, **cell):
         stages.append({"stage": stage, "resource": stage_resource(c, stage), **cell})
     add("stage-assets")
-    if c.get("schema_version") == 2:
+    if _has_automatic_data_preparation(c):
         add("prepare-data")
     add("model-smoke")
     add("rollout")
