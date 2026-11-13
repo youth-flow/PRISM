@@ -39,6 +39,12 @@ From: docker.io/pytorch/pytorch@sha256:2b59b1b91885677814f78be1f8df48a25d5dc952e
 
 %test
     set -eu
+    test_root="$(mktemp -d /tmp/prism-tests.XXXXXX)"
+    case "$test_root" in
+        /tmp/prism-tests.*) ;;
+        *) echo "Unexpected test directory: $test_root" >&2; exit 2 ;;
+    esac
+    trap 'rm -rf -- "$test_root"' EXIT
     python -c 'import torch, trl; assert torch.__version__.split("+")[0] == "2.7.1"; assert torch.version.cuda == "12.6"; assert trl.__version__ == "0.15.2"'
     python -m pip check
-    python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp /tmp/prism-tests
+    python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp "$test_root/pytest"

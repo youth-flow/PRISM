@@ -100,3 +100,12 @@ def test_submit_execution_changes_to_canonical_repo_path(platform):
     result = subprocess.run([bash, "-c", script], env=env, capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == expected
+
+
+def test_container_test_uses_a_validated_unique_temporary_directory():
+    definition = (Path(__file__).parents[1]/"containers/prism.def").read_text(encoding="utf-8")
+    assert 'mktemp -d /tmp/prism-tests.XXXXXX' in definition
+    assert 'case "$test_root" in' in definition
+    assert 'trap \'rm -rf -- "$test_root"\' EXIT' in definition
+    assert '--basetemp "$test_root/pytest"' in definition
+    assert '--basetemp /tmp/prism-tests\n' not in definition
