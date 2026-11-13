@@ -8,6 +8,7 @@ From: docker.io/pytorch/pytorch@sha256:2b59b1b91885677814f78be1f8df48a25d5dc952e
     prism.requirements.sha256 "{{ LOCK_SHA256 }}"
 
 %files
+    containers/prism.def /opt/prism/containers/prism.def
     containers/requirements.lock /opt/prism/containers/requirements.lock
     pyproject.toml /opt/prism/pyproject.toml
     README.md /opt/prism/README.md
