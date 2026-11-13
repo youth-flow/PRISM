@@ -17,6 +17,10 @@ stage="${1:?Supply a stage}"; shift
 if prism_stage_gpu "$stage"; then gpu=1; else gpu=0; fi
 prism_check_paths
 : "${PRISM_ACCOUNT:?}" "${PRISM_GPU_PARTITION:?}" "${PRISM_CPU_PARTITION:?}"
+if [[ "$gpu" == 0 ]]; then
+  [[ "$PRISM_CPU_PARTITION" != FILL_* ]] || prism_die "CPU partition is not verified; request one from the service"
+  [[ "$PRISM_CPU_PARTITION" != "$PRISM_GPU_PARTITION" ]] || prism_die "GPU partition requires GRES; configure a separate CPU partition"
+fi
 export PRISM_COMMIT PRISM_CONFIG_PATH="" PRISM_CONFIG_SHA256=""
 PRISM_COMMIT="$(prism_git rev-parse HEAD)"
 [[ -z "$(prism_git status --porcelain)" ]] || prism_die "Commit source first; checkout must be clean"

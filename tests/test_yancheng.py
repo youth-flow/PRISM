@@ -28,7 +28,7 @@ def platform(tmp_path):
         subprocess.run(command, cwd=repo, check=True, capture_output=True)
     cfg = storage/"frozen config.yaml"
     cfg.write_text("test: true\n")
-    env = {**os.environ, "PRISM_STORAGE": shell_path(storage), "PRISM_REPO": shell_path(repo), "PRISM_ACCOUNT": "sc001", "PRISM_GPU_PARTITION": "q_intel_gpu_nvidia_A100_share", "PRISM_CPU_PARTITION": "q_intel_gpu_nvidia_A100_share", "PRISM_TEST_MODE": "1", "PRISM_ALLOW_SUBMIT": "0"}
+    env = {**os.environ, "PRISM_STORAGE": shell_path(storage), "PRISM_REPO": shell_path(repo), "PRISM_ACCOUNT": "sc001", "PRISM_GPU_PARTITION": "q_intel_gpu_nvidia_A100_share", "PRISM_CPU_PARTITION": "q_cpu_verified", "PRISM_TEST_MODE": "1", "PRISM_ALLOW_SUBMIT": "0"}
     for key, relative in {"IMAGE": "images/prism.sif", "HF_CACHE": "hf", "WORK": "work", "LOGS": "logs", "APPTAINER_CACHE": "acache", "APPTAINER_TMP": "atmp"}.items():
         env["PRISM_"+key] = shell_path(storage/relative)
     def run(*args, overrides=None):
@@ -45,6 +45,7 @@ def test_gpu_cpu_routing_and_dependency(platform):
     cpu = run("--dry-run", "design", "--config", shell_path(cfg), overrides={"PRISM_DEPENDENCY": "123"})
     assert cpu.returncode == 0, cpu.stderr
     assert "--gres" not in cpu.stdout and "afterok:123" in cpu.stdout
+    assert "--partition=q_cpu_verified" in cpu.stdout
     assert not (Path(repo).parent/"logs").exists()  # dry-run has no setup side effects
     api = run("--dry-run", "--resource", "cpu", "label", "--config", shell_path(cfg))
     assert api.returncode == 0, api.stderr
@@ -64,6 +65,14 @@ def test_no_actual_submission_or_storage_escape(platform):
     assert run("--dry-run", "smoke", overrides={"PRISM_DEPENDENCY": "1; touch owned"}).returncode != 0
     (repo/"uncommitted.txt").write_text("dirty")
     assert run("--dry-run", "smoke").returncode != 0
+
+
+def test_unverified_or_gpu_cpu_partition_is_rejected(platform):
+    run, cfg, _, _ = platform
+    placeholder = run("--dry-run", "design", "--config", shell_path(cfg), overrides={"PRISM_CPU_PARTITION": "FILL_FROM_VERIFIED_CPU_PARTITION"})
+    assert placeholder.returncode != 0 and "CPU partition is not verified" in placeholder.stderr
+    gpu_partition = run("--dry-run", "design", "--config", shell_path(cfg), overrides={"PRISM_CPU_PARTITION": "q_intel_gpu_nvidia_A100_share"})
+    assert gpu_partition.returncode != 0 and "GPU partition requires GRES" in gpu_partition.stderr
 
 
 def test_symlink_escape(platform, tmp_path):

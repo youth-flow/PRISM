@@ -14,9 +14,9 @@ export PRISM_APPTAINER_MODULE="amd/apptainer/1.2.5"
 # Verified account/partition on 2026-11-09, unlike the older manual examples.
 export PRISM_ACCOUNT="sc001"
 export PRISM_GPU_PARTITION="q_intel_gpu_nvidia_A100_share"
-# Only this partition is currently visible to the account. CPU stages request
-# CPU resources in it without GRES; scheduler acceptance must be checked later.
-export PRISM_CPU_PARTITION="q_intel_gpu_nvidia_A100_share"
+# The GPU partition rejects jobs without GRES. Keep CPU stages blocked until
+# the service assigns and verifies a CPU partition for this account.
+export PRISM_CPU_PARTITION="FILL_FROM_VERIFIED_CPU_PARTITION"
 export PRISM_QOS=""                 # Account offers normal,standby; keep site default.
 export PRISM_GPU_GRES="gpu:1"       # One process, one A100; no exclusive node.
 export PRISM_GPU_MODEL="A100"

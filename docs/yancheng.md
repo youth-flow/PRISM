@@ -18,7 +18,7 @@
 | 登录系统 | CentOS 7，x86_64 |
 | 本机工具 | Git 1.8.3.1、Bash 4.2；平台脚本避免 `git -C` |
 
-手册中 GPU 示例使用 `q_intel_gpu_nvidia`，CPU 示例使用 `q_amd_share` / `q_intel_share`。它们不等于本账户当前的授权队列，不能照抄。CPU-only 阶段暂指向当前可见的 A100 partition，但不请求 GRES；其调度/计费规则仍需平台确认或未来无执行预检，不冒称已有独立 CPU 队列。
+手册中 GPU 示例使用 `q_intel_gpu_nvidia`，CPU 示例使用 `q_amd_share` / `q_intel_share`。它们不等于本账户当前的授权队列，不能照抄。2026-11-13 实测确认当前 A100 partition 强制每个作业申请至少一张 GPU；CPU-only 作业会被提交钩子拒绝。`PRISM_CPU_PARTITION` 因此保留未配置占位符，wrapper 对占位符或与 GPU partition 相同的值 fail closed。开始数据准备、设计、RM 或 API Judge 前，必须由服务方分配并验证独立 CPU partition，不能用 A100 空跑 CPU 阶段。
 
 手册不同章节给出的存储额度不一致，`df` 也只反映整个并行文件系统容量；账户实际额度以服务方确认/配额查询为准。
 
@@ -92,4 +92,4 @@ API调用还需显式开启实验config里的`execution.allow_paid_api_calls`。
 
 ## 完成与待验收
 
-此次迁移完成的是接口、存储布局、源码部署和不执行计算的检查。运行时 SIF、真实驱动兼容性、CPU-only partition 接受规则以及最终模型/Judge 的运行验收，必须在后续对应阶段核实。不要把 Slurm 能查询或 dry-run 正确解释为 GPU 训练已通过。
+此次迁移完成的是接口、存储布局和源码部署。裸 GPU、宿主机驱动、共享存储及 Apptainer 模块已经过最小作业验收；运行时 SIF、独立 CPU partition 以及最终模型/Judge 的运行验收，必须在后续对应阶段核实。不要把 Slurm 能查询、裸 GPU 探针或 dry-run 正确解释为完整 GPU 训练已通过。

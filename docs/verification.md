@@ -35,10 +35,12 @@
 ## 盐城调度与裸 GPU 验收 — 2026-11-13
 
 - 使用独立OpenSSH公钥建立严格主机指纹校验的非交互连接；没有把登录密码、私钥或VPN凭证写入仓库、命令参数或日志。
-- 集群源码通过已验证的Git bundle从`0ea0526`快进到`d7ab54c`；bundle只包含Git已跟踪历史，不包含本地私有资料。
+- 集群源码通过已验证的Git bundle从`0ea0526`持续快进到当前`main`；bundle只包含Git已跟踪历史，不包含本地私有资料。
 - `sbatch --test-only`仍返回2282年的不可信预计时间；真实最小作业在约半分钟`Priority`等待后正常运行，因此不再把该站点的test-only时间作为可用性依据。
 - 最小探针作业`1972446`申请1 GPU、2 CPU、4 GiB、5分钟上限，在`gpu003`实际运行1秒并以`COMPLETED / 0:0`结束；Slurm记账确认分配1张`gpu:tesla`，`nvidia-smi`确认A100 80GB，stderr为空。
+- 增强探针作业`1972523`以同样的单GPU小资源配置运行3秒并正常完成，确认驱动`550.54.15`、Apptainer`1.2.5`、A100 80GB和`/online1`共享挂载在计算节点同时可用。
+- CPU-only探针未生成作业：站点提交钩子明确拒绝在当前A100 partition中不申请GPU。账户当前看不到`q_intel_share`或`q_amd_share`，因此独立CPU partition是正式执行前的外部前置条件；wrapper已对占位符和复用GPU partition fail closed，禁止用A100空跑CPU阶段。
 - 站点提交钩子要求调用`sbatch`时的物理当前目录位于`/online1`；仅设置`--chdir`不能通过检查。wrapper现从规范化后的`$PRISM_REPO`执行真实提交，并新增回归测试。
-- 平台专项测试为 **4 passed, 1 skipped**，Bash语法检查通过。完整本地套件在既有SciPy`cho_solve`路径触发Anaconda原生扩展进程中止，未记录为全套通过；本次Shell提交修复未进入该数值路径。
+- 平台专项测试为 **6 passed, 1 skipped**，Bash语法检查通过。当前`main`的GitHub Python 3.11锁定环境完整CI通过；本机全局Anaconda仍在既有SciPy`cho_solve`路径触发原生扩展进程中止，不把该本机环境用于正式实验。
 
 该探针只验收Slurm账户、GPU分配与宿主机驱动工具；运行时SIF、PyTorch/CUDA组合、真实模型和付费Judge仍未执行，`PRISM_ALLOW_SUBMIT=0`与付费API开关保持关闭。
