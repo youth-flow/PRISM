@@ -65,6 +65,12 @@ bash scripts/yancheng/submit.sh --dry-run smoke
 
 `preflight.sh` 只查询目录、Git、磁盘、队列、账户和模块定义，不调用 `sbatch`、`srun`、容器或 Torch。
 
+站点提交钩子会检查调用 `sbatch` 的当前物理目录，不能只依赖
+`--chdir`。`$HOME/online1` 虽指向共享存储，但从 home 侧符号链接直接
+提交会被拒绝；wrapper 在真实提交前会切换到规范化后的
+`$PRISM_REPO`（`/online1/.../PRISM`）。用户仍可从任意目录调用
+`submit.sh`，不要绕开 wrapper 手工复制长提交命令。
+
 当前实验定义已收束到 `configs/experiment.yaml`。后续准备资产和数据、镜像验收完毕并决定开始实验后，才将 `PRISM_ALLOW_SUBMIT=1`，按配置生成的计划执行：
 
 ```text

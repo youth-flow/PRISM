@@ -4,6 +4,11 @@ prism_die() { echo "PRISM: $*" >&2; exit 2; }
 # Login nodes currently provide Git 1.8.3.1, predating git -C.
 prism_git() { (cd "$PRISM_REPO" && git "$@"); }
 
+# The site submission hook rejects jobs launched from the home-side online1
+# symlink even when sbatch --chdir points at shared storage.  Run the submit
+# process itself from the canonical repository path under /online1.
+prism_exec_from_repo() { (cd "$PRISM_REPO" && "$@"); }
+
 prism_forward_api_envs() {
   # Names come from the validated config. Values remain in the process
   # environment, never Apptainer command-line flags or output.

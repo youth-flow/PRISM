@@ -51,4 +51,4 @@ if [[ "$dry" == 1 ]]; then printf '%q ' "${command[@]}"; printf '\n'; exit 0; fi
 [[ "${PRISM_IMAGE_SHA256:-}" =~ ^[0-9a-f]{64}$ && -f "$PRISM_IMAGE" ]] || prism_die "Install and verify the runtime image first"
 printf '%s  %s\n' "$PRISM_IMAGE_SHA256" "$PRISM_IMAGE" | sha256sum --check --status
 mkdir -p "$PRISM_LOGS" "$PRISM_WORK" "$PRISM_HF_CACHE" "$PRISM_APPTAINER_CACHE" "$PRISM_APPTAINER_TMP"
-"${command[@]}"
+prism_exec_from_repo "${command[@]}"

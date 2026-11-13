@@ -14,6 +14,7 @@ configs/local*.yaml
 slurm-*.out
 # Provider documents include private account credentials. Keep local only.
 /计算服务/
+/计算资源/
 /local/
 /releases/
 # Project-local reviewer prompts/responses are audit records, not published code.

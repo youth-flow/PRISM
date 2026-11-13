@@ -31,3 +31,14 @@
 - 新增增广最小二乘、pairwise covariance恒等式、两边解析最优、away/drop、zero/rank-one K、独立SLSQP与未收敛阻断标注的回归检查。
 - 新增tiny随机OLMo2架构的EOS/logp独立对照和真实TRL更新/adapter重载，确认更新前后FrozenReward全部权重逐元素不变；另以n1024/d2048可分rank-one设计对照L2 BT精确一维最优条件。
 - 最新全套本地测试为 **82 passed, 1 skipped**；跳过项仍是Windows符号链接权限。没有加载真实1B checkpoint、调用收费API或运行GPU/集群作业。真实EOS数据的条件数和500次FW收敛性仍需后续预检。
+
+## 盐城调度与裸 GPU 验收 — 2026-11-13
+
+- 使用独立OpenSSH公钥建立严格主机指纹校验的非交互连接；没有把登录密码、私钥或VPN凭证写入仓库、命令参数或日志。
+- 集群源码通过已验证的Git bundle从`0ea0526`快进到`d7ab54c`；bundle只包含Git已跟踪历史，不包含本地私有资料。
+- `sbatch --test-only`仍返回2282年的不可信预计时间；真实最小作业在约半分钟`Priority`等待后正常运行，因此不再把该站点的test-only时间作为可用性依据。
+- 最小探针作业`1972446`申请1 GPU、2 CPU、4 GiB、5分钟上限，在`gpu003`实际运行1秒并以`COMPLETED / 0:0`结束；Slurm记账确认分配1张`gpu:tesla`，`nvidia-smi`确认A100 80GB，stderr为空。
+- 站点提交钩子要求调用`sbatch`时的物理当前目录位于`/online1`；仅设置`--chdir`不能通过检查。wrapper现从规范化后的`$PRISM_REPO`执行真实提交，并新增回归测试。
+- 平台专项测试为 **4 passed, 1 skipped**，Bash语法检查通过。完整本地套件在既有SciPy`cho_solve`路径触发Anaconda原生扩展进程中止，未记录为全套通过；本次Shell提交修复未进入该数值路径。
+
+该探针只验收Slurm账户、GPU分配与宿主机驱动工具；运行时SIF、PyTorch/CUDA组合、真实模型和付费Judge仍未执行，`PRISM_ALLOW_SUBMIT=0`与付费API开关保持关闭。

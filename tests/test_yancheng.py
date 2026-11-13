@@ -89,3 +89,14 @@ def test_container_api_environment_forwarding_uses_names_without_printing_values
     assert "fixture-only-key" not in result.stdout + result.stderr
     missing = subprocess.run([bash, "-c", f"source {source}\nprism_forward_api_envs PRISM_MISSING_TEST_KEY"], env=env, capture_output=True, text=True)
     assert missing.returncode != 0 and "Missing API environment variable" in missing.stderr
+
+
+def test_submit_execution_changes_to_canonical_repo_path(platform):
+    _, _, repo, env = platform
+    bash = str(Path(shutil.which("git")).parents[1]/"bin/bash.exe") if os.name == "nt" else shutil.which("bash")
+    source = shlex.quote(shell_path(repo/"scripts/yancheng/common.sh"))
+    expected = shell_path(repo)
+    script = f"source {source}\nprism_exec_from_repo pwd"
+    result = subprocess.run([bash, "-c", script], env=env, capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
