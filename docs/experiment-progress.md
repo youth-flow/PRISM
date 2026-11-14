@@ -9,7 +9,7 @@ Empirical/PRISM、seeds 11/23、每单元1024有效标签、4096 PPO episodes。
 
 | 阶段 | 当前状态 | 完成验收条件 |
 | --- | --- | --- |
-| 1 候选生成与共享SFT基线 | 候选32片及合并已验收；共享基线收尾 | 完整pool合并哈希/覆盖/顺序/有限数检查；500条评价与541条IFEval共享基线及receipt |
+| 1 候选生成与共享SFT基线 | 已完成，独立CPU验收1978162通过 | 完整pool合并哈希/覆盖/顺序/有限数检查；500条评价与541条IFEval共享基线及receipt |
 | 2 Design | 1978113已在bn030正式计算，16 CPU | 固定目标、ridge和500步上限，FW gap达既定阈值；未收敛不得花标签 |
 | 3 DeepSeek标注与Reward | 四单元已按依赖入队 | 4096个有效标签；完整失败/重试/usage记录；四份BT拟合诊断和receipt |
 | 4 PPO | 四单元单卡4090，等待Reward | 各4096 episodes/64 updates；数值、adapter与训练receipt通过 |
@@ -48,3 +48,23 @@ IFEval为135/541，未见意外终止。2核/16G分片1977931以763秒完成，
 新旧源码的Design、pipeline、config与io逐文件无差异，配置、输入和16核/24G不变。
 四个sample成功依赖改为1978113，后序链保持；所有待运行CPU任务排除bn002，
 私有env有备份。该问题属于容器启动I/O，不计为数学求解结果。
+
+## 第一阶段完成验收
+
+生产阶段历时1小时39分43秒；32片候选2691386 tokens、12000条回答与完整
+2048维特征已合并冻结，共享SFT生成500条通用评价与541条IFEval。
+独立CPU验收1978162用时19秒，不加载模型、不调用API：逐片与主池比较，
+特征/logp逐元素一致；全部receipt哈希、全局ID/顺序、原tokenizer解码、
+EOS约定、长度上限均通过。官方checker保存的逐条布尔结果与四项分母重新汇总一致。
+
+SFT IFEval：prompt strict 46.9501%、prompt loose 49.5379%、
+instruction strict 57.6739%、instruction loose 60.4317%。通用评价回答平均
+234.922 tokens，512上限截断率25.6%；保留冻结上限，未据结果调整参数。
+阶段生产及验收合计约9.891 GPU卡时、67.693 CPU核时，
+不含平台准备、Design启动故障及后续计算。
+
+验收结果`phase1.audit.json` SHA256为
+`d85b5ace6f59cdc07f83537abb544b2cbd23f22a5d5ecb06619a8d9381054ff1`；
+receipt为`3048611d6169326d5fb3c264d5d59d4477f2502bc82e6da59ba86f90c538f761`。
+Design1978113在bn030正常计算，检查时约14.4/16核平均利用；
+等待固定FW gap通过后接续4096个训练标签、四份Reward与PPO。
