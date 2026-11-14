@@ -45,6 +45,11 @@ else
 fi
 runner=(apptainer exec "${opts[@]}" "$PRISM_IMAGE")
 
+if [[ "$stage" == cpu-smoke && -f "$PRISM_REPO/assets/ifeval/source-manifest.json" ]]; then
+  export APPTAINERENV_PRISM_TEST_IFEVAL_SOURCE="$PRISM_REPO/assets/ifeval"
+  export APPTAINERENV_PRISM_TEST_NLTK_DATA="$PRISM_REPO/assets/nltk_data"
+fi
+
 if [[ "$stage" == label || "$stage" == evaluate-judge ]]; then
   role=training
   [[ "$stage" != evaluate-judge ]] || role=evaluation
@@ -61,7 +66,7 @@ if [[ "$stage" == smoke ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
   "${runner[@]}" python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp "$jobroot/pytest"
 elif [[ "$stage" == cpu-smoke ]]; then
-  "${runner[@]}" python /opt/prism/scripts/smoke_cpu.py
+  "${runner[@]}" python /opt/prism/scripts/smoke_cpu.py "$@"
 elif [[ "$stage" == judge-export || "$stage" == judge-import ]]; then
   "${runner[@]}" python -m prism.local_judge "${stage#judge-}" "$@"
 else

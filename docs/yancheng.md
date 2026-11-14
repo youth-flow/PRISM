@@ -161,3 +161,7 @@ PRISM_ALLOW_SUBMIT=1 bash scripts/yancheng/submit.sh prepare-data \
 计算节点核对revision/分区/文件哈希，只读取prompt与ID列，并用同一个
 prepare_data算法和SFT tokenizer生成固定划分。原始来源哈希写入最终数据manifest，
 不依赖计算节点公网，也不在本机运行正式数据筛选。
+
+已确认网络阻断后，可显式使用`cpu-smoke --offline --tests`验收离线容器
+及CPU兼容测试；网络结果会明确记录为`skipped_offline`，不能当作联网成功。
+完整测试单次申请4 CPU/6G/15分钟，测试中不调用真实API，不加载真实模型权重。
