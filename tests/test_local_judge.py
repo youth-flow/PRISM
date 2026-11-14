@@ -7,13 +7,14 @@ from prism import pipeline
 from prism.io import cell, dump, receipt, root, rows, verify_receipt, write_rows
 from prism.local_judge import export_packet, import_results, run_packet
 from test_evaluation_v2 import config, save_generations
+from test_judges import preference_choice
 
 
 def fake_transport(url, payload, key, timeout):
     assert key == "LOCAL_TEST_KEY"
     if url.endswith("/responses"):
         return {"status": "completed", "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "TIE"}]}], "usage": {"input_tokens": 9, "output_tokens": 1}}, "test-eval"
-    return {"choices": [{"message": {"content": '{"preferred_response":"response_A"}'}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 9, "completion_tokens": 1}}, "test-train"
+    return {"choices": [preference_choice()], "usage": {"prompt_tokens": 9, "completion_tokens": 1}}, "test-train"
 
 
 def test_evaluation_packet_round_trip_resume_and_input_binding(tmp_path, monkeypatch):
@@ -131,3 +132,52 @@ def test_prompt_protocol_mismatch_is_rejected_without_api_calls(tmp_path, monkey
     results.write_text("".join(json.dumps(row)+"\n" for row in records))
     with pytest.raises(ValueError, match="different prompt protocol"):
         import_results(c, packet, results)
+
+
+@pytest.mark.parametrize("endpoint", [None, "https://api.deepseek.com/v1/chat/completions"])
+def test_strict_tool_packet_endpoint_is_bound_before_spending(tmp_path, endpoint):
+    from prism.local_judge import _hash
+    c = config(tmp_path)
+    training_fixture(c)
+    packet, results = tmp_path/"packet.json", tmp_path/"results.jsonl"
+    export_packet(c, "label", "prism", 8, 11, packet)
+    data = json.loads(packet.read_text())
+    if endpoint is None:
+        del data["request_endpoint"]
+    else:
+        data["request_endpoint"] = endpoint
+    del data["packet_id"]
+    data["packet_id"] = _hash(data)
+    dump(packet, data)
+    with pytest.raises(ValueError, match="execution endpoint changed"):
+        run_packet(packet, results, execute=True, transport=lambda *a: pytest.fail("must not spend"))
+
+
+def test_native_tool_arguments_must_match_saved_raw_label(tmp_path, monkeypatch):
+    c = config(tmp_path)
+    training_fixture(c)
+    packet, results = tmp_path/"packet.json", tmp_path/"results.jsonl"
+    export_packet(c, "label", "prism", 8, 11, packet)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "LOCAL_TEST_KEY")
+    run_packet(packet, results, execute=True, transport=fake_transport)
+    records = rows(results)
+    records[0]["result"]["tool_calls"][0]["function"]["arguments"] = '{"preferred_response":"response_B"}'
+    results.write_text("".join(json.dumps(row)+"\n" for row in records))
+    with pytest.raises(ValueError, match="tool channel or endpoint"):
+        import_results(c, packet, results)
+
+
+def test_legacy_evaluation_packet_remains_compatible_with_unchanged_luna_protocol(tmp_path, monkeypatch):
+    from prism.local_judge import _hash
+    c = config(tmp_path)
+    save_generations(c)
+    packet, results = tmp_path/"packet.json", tmp_path/"results.jsonl"
+    export_packet(c, "evaluate-judge", "prism", 8, 11, packet)
+    data = json.loads(packet.read_text())
+    for key in ("packet_id", "judge_protocol", "request_endpoint"):
+        del data[key]
+    data["packet_id"] = _hash(data)
+    dump(packet, data)
+    monkeypatch.setenv("OPENAI_API_KEY", "LOCAL_TEST_KEY")
+    run_packet(packet, results, execute=True, transport=fake_transport)
+    assert import_results(c, packet, results)["win_rate_vs_sft"] == .5

@@ -77,7 +77,8 @@ def export_packet(c, stage, method, budget, seed, destination):
     role, tasks, dependencies, log, task_id = _tasks(c, stage, method, budget, seed)
     prior = [{"task_id": task_id(r), "attempt": r["attempt"], "result": r} for r in (rows(log) if log.exists() else [])]
     packet = {"kind": "prism_local_judge", "version": 1, "stage": stage, "method": method, "budget": budget, "seed": seed,
-              "judge_protocol": judge_protocol(role),
+              "judge_protocol": judge_protocol(role, judge_settings(c, role)["backend"]),
+              "request_endpoint": APIJudge(c, role).url,
               "role": role, "settings": judge_settings(c, role), "config_sha256": _hash(c),
               "input_sha256": {str(p): digest(p) for p in dependencies}, "tasks": tasks, "prior_calls": prior}
     packet["packet_id"] = _hash(packet)
@@ -98,8 +99,12 @@ def _load_packet(path):
     if packet["role"] != ("training" if packet["stage"] == "label" else "evaluation"):
         raise ValueError("Judge packet role/stage mismatch")
     legacy = "preference_ab_v1" if packet["role"] == "training" else "preference_ab_tie_v1"
-    if packet.get("judge_protocol", legacy) != judge_protocol(packet["role"]):
+    if packet.get("judge_protocol", legacy) != judge_protocol(packet["role"], packet["settings"]["backend"]):
         raise ValueError("Judge prompt protocol changed; archive the old packet/results before collecting a new batch")
+    expected_endpoint = APIJudge({"judges": {packet["role"]: packet["settings"]}}, packet["role"]).url
+    fallback = None if packet.get("judge_protocol") == "preference_tool_enum_v4" else expected_endpoint
+    if packet.get("request_endpoint", fallback) != expected_endpoint:
+        raise ValueError("Judge packet execution endpoint changed")
     return packet
 
 
@@ -122,6 +127,14 @@ def _records(packet, results):
         legacy = "preference_ab_v1" if packet["role"] == "training" else "preference_ab_tie_v1"
         if result.get("judge_protocol", legacy) != packet.get("judge_protocol", legacy):
             raise ValueError("Judge results use a different prompt protocol")
+        if packet.get("judge_protocol") == "preference_tool_enum_v4":
+            calls = result.get("tool_calls") or []
+            if (result.get("request_endpoint") != packet.get("request_endpoint")
+                    or (result.get("label") is not None and (result.get("finish_reason") != "tool_calls"
+                        or len(calls) != 1 or calls[0].get("type") != "function"
+                        or calls[0].get("function", {}).get("name") != "record_preference"
+                        or calls[0].get("function", {}).get("arguments") != result.get("raw")))):
+                raise ValueError("Judge tool channel or endpoint does not match its packet")
         if key in indexed or result.get("seed") != call["seed"] or result.get("flip") != call["flip"]:
             raise ValueError("Duplicate or misaligned Judge result")
         label = result.get("label")

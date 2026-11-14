@@ -184,3 +184,16 @@ JSON mode仅保证JSON语法，候选ID/键集合/重复键/截断仍由客户�
 本机33项接口、原始答案方向及数据包专项通过（另1项依赖Torch留待完整集群检查）。
 真实回归将包含新增失败task99、顽固task17重复展示与已知偏好对照；
 除原网络重试外，还要求该诊断没有输出格式错误，随后才考虑完整标注。
+
+v3真实回归1978694未通过：28例中27例最终通过，但35次请求出现8次格式/截断
+问题，包括编造response_D；原schema与截断闸门全部拦截，未放行完整v3标注。
+其完整代码检查1978693为151 passed。未把静态测试或27例通过当作研究阶段完成。
+
+下一候选`preference_tool_enum_v4`按DeepSeek官方严格工具schema使用
+`https://api.deepseek.com/beta/chat/completions`，强制单次record_preference、
+strict=true、preferred_response只允许response_A/response_B两个枚举。
+此地址相对冻结配置中的/v1是显式运输协议修订；配置和研究参数保留，
+实际request_endpoint同时绑定packet和每条结果，不能冒称仍请求原路径。
+返回对象作为二元偏好数据读取；原始工具参数、finish_reason、完整usage均保留。
+客户端继续拒绝多次/错误工具、非枚举、重复键与截断。
+OpenAI/Luna原评价协议及其已入队导出任务保持兼容，已有专门旧包兼容检查。

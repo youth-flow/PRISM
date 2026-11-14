@@ -20,25 +20,34 @@ def config():
                        "max_output_tokens": 1024}}}
 
 
+def preference_choice(text='{"preferred_response":"response_A"}', finish_reason="tool_calls"):
+    return {"message": {"content": None, "tool_calls": [{"id": "test-call", "type": "function",
+            "function": {"name": "record_preference", "arguments": text}}]}, "finish_reason": finish_reason}
+
+
 def test_deepseek_payload_orientation_and_usage(monkeypatch):
     monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
     seen = []
     def transport(url, payload, api_key, timeout):
         seen.append((url, payload, timeout))
         return {"id": "response-1", "model": "served-version", "system_fingerprint": "fp",
-                "choices": [{"message": {"content": '{"preferred_response":"response_A"}'}, "finish_reason": "stop"}],
+                "choices": [preference_choice()],
                 "usage": {"prompt_tokens": 250, "completion_tokens": 1,
                           "prompt_cache_hit_tokens": 10, "arbitrary_string": "ignored"}}, "request-1"
     judge = make_judge(config(), transport=transport)
     result = judge.call([{"role": "user", "content": "question"}], "canonical first", "canonical second", 77, True)
     url, payload, timeout = seen[0]
-    assert url == "https://api.deepseek.com/v1/chat/completions"
+    assert url == "https://api.deepseek.com/beta/chat/completions"
+    assert judge.settings["base_url"] == "https://api.deepseek.com/v1"
     assert payload["thinking"] == {"type": "disabled"} and payload["temperature"] == 1.0
-    assert payload["max_tokens"] == 64 and "seed" not in payload and "tools" not in payload
+    assert payload["max_tokens"] == 64 and "seed" not in payload
     displayed = json.loads(payload["messages"][1]["content"])
     assert displayed["response_A"] == "canonical second"
-    assert payload["response_format"] == {"type": "json_object"}
-    assert result["judge_protocol"] == "preference_response_json_v3"
+    function = payload["tools"][0]["function"]
+    assert function["strict"] is True and function["parameters"]["additionalProperties"] is False
+    assert function["parameters"]["properties"]["preferred_response"]["enum"] == ["response_A", "response_B"]
+    assert payload["tool_choice"] == {"type": "function", "function": {"name": "record_preference"}}
+    assert result["judge_protocol"] == "preference_tool_enum_v4" and result["request_endpoint"] == url
     assert result["label"] == 0 and result["model"] == "served-version"
     assert result["request_id"] == "request-1" and result["response_id"] == "response-1"
     assert result["usage"] == {"prompt_tokens": 250, "completion_tokens": 1, "prompt_cache_hit_tokens": 10}
@@ -56,8 +65,8 @@ def test_multiple_choice_conversation_is_preserved_as_comparison_data(monkeypatc
         assert "Do not solve the original task" in data["evaluation_instruction"]
         assert "response_A or response_B" in data["evaluation_instruction"]
         assert payload["max_tokens"] == 64 and payload["temperature"] == 1
-        assert payload["response_format"] == {"type": "json_object"}
-        return {"choices": [{"message": {"content": '{"preferred_response":"response_A"}'}, "finish_reason": "stop"}]}, None
+        assert payload["tools"][0]["function"]["strict"] is True
+        return {"choices": [preference_choice()]}, None
     result = make_judge(config(), transport=transport).call(messages, "(D)", "(C)", 5, False)
     assert result["label"] == 1
 
@@ -71,7 +80,7 @@ def test_multiple_choice_conversation_is_preserved_as_comparison_data(monkeypatc
                                  '{"preferred_response":"response_A"} extra', '   '])
 def test_structured_preference_rejects_ambiguous_or_non_schema_answers(monkeypatch, text):
     monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
-    response = {"choices": [{"message": {"content": text}, "finish_reason": "stop"}],
+    response = {"choices": [preference_choice(text)],
                 "usage": {"prompt_tokens": 17, "completion_tokens": 9}}
     result = make_judge(config(), transport=lambda *a: (response, None)).call([], "(D)", "(C)", 2, False)
     assert result["label"] is None and result["error"]["type"] == "invalid_judgment_format"
@@ -83,8 +92,24 @@ def test_structured_preference_rejects_ambiguous_or_non_schema_answers(monkeypat
 def test_structured_preference_orientation(preferred, flip, label, monkeypatch):
     monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
     text = json.dumps({"preferred_response": preferred})
-    result = make_judge(config(), transport=lambda *a: ({"choices": [{"message": {"content": text}, "finish_reason": "stop"}]}, None)).call([], "x", "y", 0, flip)
+    result = make_judge(config(), transport=lambda *a: ({"choices": [preference_choice(text)]}, None)).call([], "x", "y", 0, flip)
     assert result["label"] == label
+
+
+@pytest.mark.parametrize("failure", ["plain_text", "wrong_function", "multiple_calls", "wrong_type"])
+def test_strict_preference_requires_exact_native_tool_channel(monkeypatch, failure):
+    monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
+    choice = preference_choice()
+    if failure == "plain_text":
+        choice = {"message": {"content": '{"preferred_response":"response_A"}'}, "finish_reason": "stop"}
+    elif failure == "wrong_function":
+        choice["message"]["tool_calls"][0]["function"]["name"] = "other"
+    elif failure == "multiple_calls":
+        choice["message"]["tool_calls"] *= 2
+    else:
+        choice["message"]["tool_calls"][0]["type"] = "custom"
+    result = make_judge(config(), transport=lambda *a: ({"choices": [choice]}, None)).call([], "x", "y", 0, False)
+    assert result["label"] is None and result["error"]["type"] == "invalid_judgment_format"
 
 
 def test_openai_responses_reads_final_text_not_reasoning_and_accepts_tie(monkeypatch):
@@ -106,13 +131,13 @@ def test_openai_responses_reads_final_text_not_reasoning_and_accepts_tie(monkeyp
     assert result["label"] == .5 and result["usage"]["output_tokens_details"]["reasoning_tokens"] == 88
 
 
-@pytest.mark.parametrize("text,finish_reason,error", [("A because better", "stop", "invalid_judgment_format"),
-                                                      ("TIE", "stop", "invalid_judgment_format"),
+@pytest.mark.parametrize("text,finish_reason,error", [("A because better", "tool_calls", "invalid_judgment_format"),
+                                                      ("TIE", "tool_calls", "invalid_judgment_format"),
                                                       ("A", "length", "incomplete_response")])
 def test_training_format_and_finish_failures_keep_usage(monkeypatch, text, finish_reason, error):
     monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
     def transport(*args):
-        return {"choices": [{"message": {"content": text}, "finish_reason": finish_reason}],
+        return {"choices": [preference_choice(text, finish_reason)],
                 "usage": {"prompt_tokens": 100, "completion_tokens": 64}}, None
     result = make_judge(config(), transport=transport).call([], "a", "b", 0, False)
     assert result["label"] is None and result["error"]["type"] == error
