@@ -1,6 +1,6 @@
 # 是石科技盐城集群：PRISM 平台
 
-## 已核对的信息（2026-11-09）
+## 已核对的信息（2026-11-14）
 
 已阅读本地计算服务资料中的上机手册、快速入门和账户说明，并通过已登录环境独立建立 SSH 连接查询元数据。SSH 主机公钥与 Xshell 已保存的公钥核对一致。没有提交作业、申请计算节点、加载模型或执行 GPU 运算。
 
@@ -10,17 +10,22 @@
 | 登录节点 | `psn001`–`psn003`；本次查询落在 `psn002` |
 | 当前账户共享根目录 | `/online1/yangyanxin/yangyanxin`；`$HOME/online1` 是指向它的符号链接 |
 | Slurm account | `sc001` |
-| 当前可见 partition | `q_intel_gpu_nvidia_A100_share` |
-| 资源描述 | A100 80GB PCIe；单节点 8 GPU、64 CPU；GRES 显示 `gpu:tesla:8` |
+| 当前授权 partition | CPU `q_amd_share`；GPU `q_intel_gpu_nvidia_A100_share` |
+| CPU资源 | 243节点、每节点128 CPU/193288 MB；用户关联并发上限`cpu=2560`；1500 MB/CPU |
+| GPU资源 | A100 80GB PCIe；单节点8 GPU、64 CPU、1031000 MB；默认8 CPU/GPU |
 | 可选 QOS | `normal,standby`；脚本不擅自覆盖平台默认 |
 | Apptainer 模块 | `amd/apptainer/1.2.5` |
 | 其他模块 | `amd/python/3.11.2`、多个 CUDA/Anaconda/Singularity 模块 |
 | 登录系统 | CentOS 7，x86_64 |
+| 存储配额 | `/online1`个人1 TiB、600000文件；2026-11-14使用约3.3 GiB/159文件 |
 | 本机工具 | Git 1.8.3.1、Bash 4.2；平台脚本避免 `git -C` |
 
-手册中 GPU 示例使用 `q_intel_gpu_nvidia`，CPU 示例使用 `q_amd_share` / `q_intel_share`。它们不等于本账户当前的授权队列，不能照抄。2026-11-13 实测确认当前 A100 partition 强制每个作业申请至少一张 GPU；CPU-only 作业会被提交钩子拒绝。`PRISM_CPU_PARTITION` 因此保留未配置占位符，wrapper 对占位符或与 GPU partition 相同的值 fail closed。开始数据准备、设计、RM 或 API Judge 前，必须由服务方分配并验证独立 CPU partition，不能用 A100 空跑 CPU 阶段。
-
-手册不同章节给出的存储额度不一致，`df` 也只反映整个并行文件系统容量；账户实际额度以服务方确认/配额查询为准。
+2026-11-14的关联、分区和`--test-only`检查确认本账户属于`amd_share`与
+`gpu_nvidia_A100`组。CPU关联`GrpTRES=cpu=2560`，20节点×128核的测试请求
+被接受；GPU分区的1卡和8卡请求均被接受。测试请求没有入队或计费，且不能
+视为资源立即可用。查询时8张A100全部已分配；CPU分区有21777个空闲核。
+站点`--test-only`对CPU给出2031年的不可信预测，因此仍需真实短CPU smoke
+确认调度与容器。个人配额由`quota`确认为1 TiB，而不是`df`展示的全文件系统容量。
 
 ## 目录
 
@@ -50,16 +55,19 @@ CentOS 7 的主机系统不能据此认定能原生安装新版 PyTorch wheel，
 
 `containers/prism.def` 与 `containers/requirements.lock` 是统一运行时定义。`.github/workflows/build-runtime-image.yml` 仅手动触发构建，发布到 `ghcr.io/youth-flow/prism-runtime`，记录 manifest digest、SIF SHA256 和 pip freeze。二者的 digest 不能混用。
 
-后续完成构建后，把 SIF 通过 Xftp/SFTP 放到 `prism/images/prism.sif` 并填写 `PRISM_IMAGE_SHA256`。集群若能拉取 GHCR，也可在允许的软件准备环境中按 manifest digest 拉取。此次不启动容器构建、容器测试或 GPU 验收。
+运行时SIF已放到`prism/images/prism.sif`并以声明的SHA256复核通过。文件存在和
+哈希一致不等于运行时可用；仍需`cpu-smoke`与`model-smoke`分别验收CPU依赖、
+代理、PyTorch/CUDA、真实OLMo 1B和A100路径。
 
 `job.sbatch` 加载 `amd/apptainer/1.2.5`，挂载完整共享根目录，隔离容器 home，将 HF/cache/tmp 都落在共享目录；不设置其他站点专用 mount workaround。CUDA visibility 由 Slurm 提供；只有 GPU 阶段使用 `--nv`。不通过 `mpirun` 启动当前单进程 PyTorch 程序。
 
 ## 当前可用的准备与检查命令
 
 ```bash
-cd "$HOME/online1/PRISM"
-source "$HOME/online1/prism/env.sh"
+cd /online1/yangyanxin/yangyanxin/PRISM
+source /online1/yangyanxin/yangyanxin/prism/env.sh
 bash scripts/yancheng/preflight.sh
+bash scripts/yancheng/submit.sh --dry-run cpu-smoke
 bash scripts/yancheng/submit.sh --dry-run smoke
 ```
 
@@ -74,7 +82,7 @@ bash scripts/yancheng/submit.sh --dry-run smoke
 当前实验定义已收束到 `configs/experiment.yaml`。后续准备资产和数据、镜像验收完毕并决定开始实验后，才将 `PRISM_ALLOW_SUBMIT=1`，按配置生成的计划执行：
 
 ```text
-smoke -> stage-assets -> prepare-data -> validate --ready -> model-smoke
+cpu-smoke -> stage-assets -> prepare-data -> validate --ready -> model-smoke
 rollout -> design
 每个 method/budget/seed: sample -> label -> reward -> policy
 evaluate-reference（共享SFT一次）
@@ -82,7 +90,11 @@ evaluate-reference（共享SFT一次）
 aggregate
 ```
 
-使用 `bash scripts/yancheng/submit.sh STAGE --config /online1/.../frozen.yaml ...`。GPU 阶段申请 `--gres=gpu:1`、1 node、1 task；CPU 阶段不申请 GPU。所有阶段都显式设置 account、partition、CPU、内存、时间、共享 working directory 和分开的日志。不会申请独占节点。当前配置只支持单进程单 GPU。
+使用 `bash scripts/yancheng/submit.sh STAGE --config /online1/.../frozen.yaml ...`。
+GPU阶段申请`--gres=gpu:1`、1 node、1 task；CPU阶段不申请GPU。wrapper按阶段
+设置经审计的CPU、内存和时间默认值：CPU内存遵循1500 MB/CPU；GPU任务使用
+8 CPU/64 GB，rollout默认24小时，PPO/评价默认12小时。环境变量覆盖只用于
+看过pilot日志后的单次显式调整。不会申请独占节点，当前配置只支持单进程单GPU。
 
 资源由Python配置层计算：`python scripts/run.py resource --for-stage label --config ...`。API Judge返回cpu、本地HF Judge返回gpu；将结果通过wrapper的`--resource cpu|gpu`传入，例如`submit.sh --resource cpu label --config ...`。这样Bash不复制provider判断或解析YAML。默认提交开关仍关闭，`--dry-run`可以检查命令。
 
@@ -92,4 +104,7 @@ API调用还需显式开启实验config里的`execution.allow_paid_api_calls`。
 
 ## 完成与待验收
 
-此次迁移完成的是接口、存储布局和源码部署。裸 GPU、宿主机驱动、共享存储及 Apptainer 模块已经过最小作业验收；运行时 SIF、独立 CPU partition 以及最终模型/Judge 的运行验收，必须在后续对应阶段核实。不要把 Slurm 能查询、裸 GPU 探针或 dry-run 正确解释为完整 GPU 训练已通过。
+源码、共享存储、CPU/GPU权限、裸GPU、宿主机驱动、Apptainer模块、SIF文件
+哈希和本机两个真实API账户已经验收。仍待真实CPU容器smoke、正式数据/模型
+资产准备、`validate --ready`、真实OLMo/A100 model smoke以及本地Judge产物同步
+流程。不要把Slurm权限、文件哈希或最小API请求解释为完整实验已通过。

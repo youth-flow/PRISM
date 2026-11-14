@@ -10,7 +10,7 @@ if prism_stage_gpu "$stage"; then gpu=1; else gpu=0; fi
 [[ "$(prism_git rev-parse HEAD)" == "$PRISM_COMMIT" ]]
 [[ -z "$(prism_git status --porcelain)" ]]
 printf '%s  %s\n' "$PRISM_IMAGE_SHA256" "$PRISM_IMAGE" | sha256sum --check --status
-if [[ "$stage" != smoke ]]; then
+if [[ "$stage" != smoke && "$stage" != cpu-smoke ]]; then
   : "${PRISM_CONFIG_PATH:?}" "${PRISM_CONFIG_SHA256:?}"
   printf '%s  %s\n' "$PRISM_CONFIG_SHA256" "$PRISM_CONFIG_PATH" | sha256sum --check --status
 fi
@@ -37,7 +37,8 @@ if [[ "$gpu" == 1 ]]; then
 else
   [[ "$SLURM_JOB_PARTITION" == "$PRISM_CPU_PARTITION" ]] || prism_die "Unexpected CPU partition"
 fi
-if [[ "$stage" == stage-assets || "$stage" == prepare-data ]]; then
+if [[ "$stage" == cpu-smoke || "$stage" == stage-assets || "$stage" == prepare-data ]]; then
+  prism_forward_proxy_envs
   opts+=(--env HF_HUB_OFFLINE=0 --env TRANSFORMERS_OFFLINE=0)
 else
   opts+=(--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1)
@@ -59,6 +60,8 @@ echo "stage=$stage commit=$PRISM_COMMIT image=$PRISM_IMAGE_SHA256 job=$SLURM_JOB
 if [[ "$stage" == smoke ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
   "${runner[@]}" python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp "$jobroot/pytest"
+elif [[ "$stage" == cpu-smoke ]]; then
+  "${runner[@]}" python /opt/prism/scripts/smoke_cpu.py
 else
   "${runner[@]}" python -m prism.cli "$stage" "$@"
 fi

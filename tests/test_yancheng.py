@@ -32,7 +32,7 @@ def platform(tmp_path):
     for key, relative in {"IMAGE": "images/prism.sif", "HF_CACHE": "hf", "WORK": "work", "LOGS": "logs", "APPTAINER_CACHE": "acache", "APPTAINER_TMP": "atmp"}.items():
         env["PRISM_"+key] = shell_path(storage/relative)
     def run(*args, overrides=None):
-        return subprocess.run([bash, shell_path(repo/"scripts/yancheng/submit.sh"), *args], env={**env, **(overrides or {})}, capture_output=True, text=True)
+        return subprocess.run([bash, shell_path(repo/"scripts/yancheng/submit.sh"), *args], env={**env, **(overrides or {})}, capture_output=True, text=True, encoding="utf-8")
     return run, cfg, repo, env
 
 
@@ -52,6 +52,21 @@ def test_gpu_cpu_routing_and_dependency(platform):
     assert "--gres" not in api.stdout
     local_judge = run("--dry-run", "--resource", "gpu", "evaluate-judge", "--config", shell_path(cfg))
     assert local_judge.returncode == 0 and "--gres=gpu:1" in local_judge.stdout
+
+
+def test_stage_specific_resource_profiles_and_cpu_smoke(platform):
+    run, cfg, _, _ = platform
+    smoke = run("--dry-run", "cpu-smoke")
+    assert smoke.returncode == 0, smoke.stderr
+    assert "--partition=q_cpu_verified" in smoke.stdout
+    assert "--cpus-per-task=1" in smoke.stdout and "--mem=1500M" in smoke.stdout
+    design = run("--dry-run", "design", "--config", shell_path(cfg))
+    assert design.returncode == 0, design.stderr
+    assert "--cpus-per-task=16" in design.stdout and "--mem=24G" in design.stdout
+    rollout = run("--dry-run", "rollout", "--config", shell_path(cfg))
+    assert rollout.returncode == 0, rollout.stderr
+    assert "--cpus-per-task=8" in rollout.stdout and "--mem=64G" in rollout.stdout
+    assert "--time=24:00:00" in rollout.stdout
 
 
 def test_no_actual_submission_or_storage_escape(platform):

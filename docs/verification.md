@@ -44,3 +44,13 @@
 - 平台专项测试为 **6 passed, 1 skipped**，Bash语法检查通过。当前`main`的GitHub Python 3.11锁定环境完整CI通过；本机全局Anaconda仍在既有SciPy`cho_solve`路径触发原生扩展进程中止，不把该本机环境用于正式实验。
 
 该探针只验收Slurm账户、GPU分配与宿主机驱动工具；运行时SIF、PyTorch/CUDA组合、真实模型和付费Judge仍未执行，`PRISM_ALLOW_SUBMIT=0`与付费API开关保持关闭。
+
+## CPU权限、本地API与启动前审计 — 2026-11-14
+
+- `sacctmgr`确认`sc001/yangyanxin`对`q_amd_share`具有`GrpTRES=cpu=2560`的关联，分区为243个128核节点、193288 MB/节点、1500 MB/CPU；8核与20节点×128核的`--test-only`请求均被接受且没有入队。CPU预测日期异常地落在2031年，不能作为真实排队依据，必须以短真实作业验收。
+- GPU分区单节点提供8张A100 80GB、64 CPU、1031000 MB，默认8 CPU/GPU；1卡和8卡测试请求均被接受。查询时`AllocTRES`显示8卡全部占用，因此不把测试开始时间解释为资源保证。
+- `quota`确认个人`/online1`配额1 TiB、600000文件，审计时使用约3.3 GiB/159文件。站点提交必须从字面`/online1/...`物理目录调用；审计日志已移出Git仓库，远程源码恢复干净。
+- 本机经Sakuracat代理用真实密钥各执行一次最小Judge请求：`deepseek-flash`返回A（135输入/1输出token），`gpt-6-luna`返回A（154输入/16输出token，其中9 reasoning），解析、usage和模型权限均通过。密钥位于Git忽略目录，正式付费开关仍关闭。
+- 集群SIF大小3540611072字节，声明与实际SHA256均为`c1b4e80d731cbb3124825ce81c3dcd5226865478cf051db165ec27a0856d6896`；尚未在CPU节点执行，也未加载真实1B模型。
+- 启动审计确认正式prompt、IFEval源码/NLTK资源、数据manifest和HF cache仍未准备；结构校验通过但`validate --ready`未通过。正式顺序因此是CPU smoke→资产/数据→ready校验→GPU model smoke，而不是直接提交rollout/PPO。
+- 平台wrapper新增`cpu-smoke`、cleanenv代理转发和按阶段资源默认值，避免以统一8核/64GB/8小时错误套用所有阶段；提交总开关保持fail closed。

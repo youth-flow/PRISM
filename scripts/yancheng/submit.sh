@@ -15,6 +15,7 @@ done
 export PRISM_STAGE_RESOURCE="$resource"
 stage="${1:?Supply a stage}"; shift
 if prism_stage_gpu "$stage"; then gpu=1; else gpu=0; fi
+prism_stage_resources "$stage" "$gpu"
 prism_check_paths
 : "${PRISM_ACCOUNT:?}" "${PRISM_GPU_PARTITION:?}" "${PRISM_CPU_PARTITION:?}"
 if [[ "$gpu" == 0 ]]; then
@@ -24,7 +25,7 @@ fi
 export PRISM_COMMIT PRISM_CONFIG_PATH="" PRISM_CONFIG_SHA256=""
 PRISM_COMMIT="$(prism_git rev-parse HEAD)"
 [[ -z "$(prism_git status --porcelain)" ]] || prism_die "Commit source first; checkout must be clean"
-if [[ "$stage" != smoke ]]; then
+if [[ "$stage" != smoke && "$stage" != cpu-smoke ]]; then
   cli=("$@")
   for ((i=0; i<${#cli[@]}; i++)); do
     if [[ "${cli[$i]}" == --config && $((i+1)) -lt ${#cli[@]} ]]; then PRISM_CONFIG_PATH="${cli[$((i+1))]}"; fi
@@ -34,7 +35,7 @@ if [[ "$stage" != smoke ]]; then
   PRISM_CONFIG_SHA256="$(sha256sum "$PRISM_CONFIG_PATH" | cut -d ' ' -f 1)"
 fi
 args=(--parsable --export=ALL --account="$PRISM_ACCOUNT" --nodes=1 --ntasks=1
-  --cpus-per-task="${PRISM_CPUS:-8}" --mem="${PRISM_MEMORY:-64G}" --time="${PRISM_TIME:-08:00:00}"
+  --cpus-per-task="${PRISM_CPUS:-$PRISM_DEFAULT_CPUS}" --mem="${PRISM_MEMORY:-$PRISM_DEFAULT_MEMORY}" --time="${PRISM_TIME:-$PRISM_DEFAULT_TIME}"
   --chdir="$PRISM_REPO" --job-name="prism-$stage" --output="$PRISM_LOGS/%x-%j.out" --error="$PRISM_LOGS/%x-%j.err")
 if [[ "$gpu" == 1 ]]; then
   [[ "${PRISM_GPU_GRES:-gpu:1}" =~ ^gpu(:[A-Za-z0-9_-]+)?:1$ ]] || prism_die "v1 requires exactly one GPU"
