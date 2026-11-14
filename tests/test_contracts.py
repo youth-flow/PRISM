@@ -60,6 +60,55 @@ def test_immutable_inputs(tmp_path):
         verify_receipt(tmp_path / "receipt.json")
 
 
+@pytest.mark.parametrize(
+    ("repository_files", "bin_is_ignored"),
+    [
+        (["config.json", "model.safetensors"], True),
+        (["config.json", "pytorch_model.bin"], False),
+    ],
+)
+def test_stage_assets_keeps_an_available_weight_format(monkeypatch, repository_files, bin_is_ignored):
+    import huggingface_hub
+
+    calls = []
+    monkeypatch.setattr(huggingface_hub, "list_repo_files", lambda *args, **kwargs: repository_files)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda *args, **kwargs: calls.append((args, kwargs)) or "snapshot")
+    c = {
+        "schema_version": 2,
+        "choices": {
+            "sft": {"model": "organization/model", "revision": "0" * 40},
+            "benchmark": {"kind": "exact_match"},
+        },
+        "judges": {
+            "training": {"backend": "deepseek"},
+            "evaluation": {"backend": "openai"},
+        },
+    }
+    pipeline.stage_assets(c)
+    assert len(calls) == 1
+    assert ("*.bin" in calls[0][1]["ignore_patterns"]) is bin_is_ignored
+
+
+def test_stage_assets_rejects_snapshot_without_model_weights(monkeypatch):
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "list_repo_files", lambda *args, **kwargs: ["config.json", "tokenizer.json"])
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda *args, **kwargs: pytest.fail("must fail before download"))
+    c = {
+        "schema_version": 2,
+        "choices": {
+            "sft": {"model": "organization/model", "revision": "0" * 40},
+            "benchmark": {"kind": "exact_match"},
+        },
+        "judges": {
+            "training": {"backend": "deepseek"},
+            "evaluation": {"backend": "openai"},
+        },
+    }
+    with pytest.raises(RuntimeError, match="No supported model weights"):
+        pipeline.stage_assets(c)
+
+
 def test_synthetic_design_sampling_training_pipeline(tmp_path, monkeypatch):
     # Synthetic data are confined to tests; production stages have no fake label switch.
     c = fixture_config(tmp_path)

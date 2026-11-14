@@ -176,7 +176,7 @@ def policy(c, method, budget, seed):
 
 
 def stage_assets(c):
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import list_repo_files, snapshot_download
     assets = [("sft", c["choices"]["sft"])]
     if c.get("schema_version") == 2:
         assets.extend((f"{role}_judge", settings) for role, settings in c["judges"].items() if settings["backend"] == "hf")
@@ -186,7 +186,18 @@ def stage_assets(c):
         if Path(d["model"]).is_dir():
             print(f"Using supplied local {role} snapshot: {d['model']}")
         else:
-            print(snapshot_download(d["model"], revision=d["revision"], ignore_patterns=["*.bin", "*.h5", "*.msgpack", "*.onnx", "*.tflite", "*.gguf"]))
+            files = list_repo_files(d["model"], revision=d["revision"])
+            has_safetensors = any(name.endswith(".safetensors") for name in files)
+            has_pytorch_bin = any(name.endswith(".bin") for name in files)
+            if not has_safetensors and not has_pytorch_bin:
+                raise RuntimeError(f"No supported model weights found for pinned {role} snapshot: {d['model']}@{d['revision']}")
+            # Prefer safetensors when the repository publishes it, but do not
+            # discard the only usable weights from repositories which still
+            # publish PyTorch .bin files (as OLMo-2-0425-1B-SFT does).
+            ignored = ["*.h5", "*.msgpack", "*.onnx", "*.tflite", "*.gguf"]
+            if has_safetensors:
+                ignored.append("*.bin")
+            print(snapshot_download(d["model"], revision=d["revision"], ignore_patterns=ignored))
     if c["choices"]["benchmark"].get("kind") == "ifeval":
         from .benchmarks import stage_ifeval_resources, stage_ifeval_sources
         b = c["choices"]["benchmark"]
