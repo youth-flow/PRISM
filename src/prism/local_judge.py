@@ -14,7 +14,7 @@ from threading import Event, Lock
 import numpy as np
 
 from .io import cell, digest, dump, load_config, root, rows, verify_receipt
-from .judges import APIJudge, _parse, evaluation_call_seed, judge_settings, training_call_seed
+from .judges import APIJudge, _parse, evaluation_call_seed, judge_protocol, judge_settings, training_call_seed
 
 
 def _hash(value):
@@ -77,6 +77,7 @@ def export_packet(c, stage, method, budget, seed, destination):
     role, tasks, dependencies, log, task_id = _tasks(c, stage, method, budget, seed)
     prior = [{"task_id": task_id(r), "attempt": r["attempt"], "result": r} for r in (rows(log) if log.exists() else [])]
     packet = {"kind": "prism_local_judge", "version": 1, "stage": stage, "method": method, "budget": budget, "seed": seed,
+              "judge_protocol": judge_protocol(role),
               "role": role, "settings": judge_settings(c, role), "config_sha256": _hash(c),
               "input_sha256": {str(p): digest(p) for p in dependencies}, "tasks": tasks, "prior_calls": prior}
     packet["packet_id"] = _hash(packet)
@@ -96,6 +97,9 @@ def _load_packet(path):
         raise ValueError("Judge packet hash/version mismatch")
     if packet["role"] != ("training" if packet["stage"] == "label" else "evaluation"):
         raise ValueError("Judge packet role/stage mismatch")
+    legacy = "preference_ab_v1" if packet["role"] == "training" else "preference_ab_tie_v1"
+    if packet.get("judge_protocol", legacy) != judge_protocol(packet["role"]):
+        raise ValueError("Judge prompt protocol changed; archive the old packet/results before collecting a new batch")
     return packet
 
 
@@ -115,6 +119,9 @@ def _records(packet, results):
         if task is None or type(attempt) is not int or not 0 <= attempt < len(task["calls"]):
             raise ValueError("Unknown Judge task/attempt")
         key, call = (task["id"], attempt), task["calls"][attempt]
+        legacy = "preference_ab_v1" if packet["role"] == "training" else "preference_ab_tie_v1"
+        if result.get("judge_protocol", legacy) != packet.get("judge_protocol", legacy):
+            raise ValueError("Judge results use a different prompt protocol")
         if key in indexed or result.get("seed") != call["seed"] or result.get("flip") != call["flip"]:
             raise ValueError("Duplicate or misaligned Judge result")
         label = result.get("label")

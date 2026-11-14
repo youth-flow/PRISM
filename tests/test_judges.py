@@ -37,10 +37,27 @@ def test_deepseek_payload_orientation_and_usage(monkeypatch):
     assert payload["max_tokens"] == 64 and "seed" not in payload and "tools" not in payload
     displayed = json.loads(payload["messages"][1]["content"])
     assert displayed["response_A"] == "canonical second"
+    assert result["judge_protocol"] == "preference_ab_task_boundary_v2"
     assert result["label"] == 0 and result["model"] == "served-version"
     assert result["request_id"] == "request-1" and result["response_id"] == "response-1"
     assert result["usage"] == {"prompt_tokens": 250, "completion_tokens": 1, "prompt_cache_hit_tokens": 10}
     assert result["seed_scope"] == "client_ordering_only" and timeout == 60
+
+
+def test_multiple_choice_conversation_is_preserved_as_comparison_data(monkeypatch):
+    monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
+    messages = [{"role": "user", "content": "Choose the correct option: (A) 1 (B) 2 (C) 3 (D) 4"}]
+    def transport(url, payload, key, timeout):
+        data = json.loads(payload["messages"][1]["content"])
+        assert data["conversation"] == messages
+        assert data["response_A"] == "(D)" and data["response_B"] == "(C)"
+        assert list(data)[-1] == "evaluation_instruction"
+        assert "not multiple-choice options" in data["evaluation_instruction"]
+        assert "Do not answer the conversation yourself" in data["evaluation_instruction"]
+        assert payload["max_tokens"] == 64 and payload["temperature"] == 1
+        return {"choices": [{"message": {"content": "A"}, "finish_reason": "stop"}]}, None
+    result = make_judge(config(), transport=transport).call(messages, "(D)", "(C)", 5, False)
+    assert result["label"] == 1
 
 
 def test_openai_responses_reads_final_text_not_reasoning_and_accepts_tie(monkeypatch):

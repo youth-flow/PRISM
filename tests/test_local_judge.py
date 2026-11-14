@@ -109,3 +109,25 @@ def test_wrong_packet_or_altered_order_is_rejected_before_import(tmp_path, monke
     packet.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(ValueError, match="hash/version"):
         run_packet(packet, result, execute=True, transport=lambda *args: pytest.fail("no network"))
+
+
+def test_prompt_protocol_mismatch_is_rejected_without_api_calls(tmp_path, monkeypatch):
+    from prism.local_judge import _hash
+    c = config(tmp_path)
+    training_fixture(c)
+    packet, results = tmp_path/"packet.json", tmp_path/"results.jsonl"
+    export_packet(c, "label", "prism", 8, 11, packet)
+    original = json.loads(packet.read_text())
+    legacy = {key: value for key, value in original.items() if key not in ("packet_id", "judge_protocol")}
+    legacy["packet_id"] = _hash(legacy)
+    dump(packet, legacy)
+    with pytest.raises(ValueError, match="prompt protocol changed"):
+        run_packet(packet, results, execute=True, transport=lambda *args: pytest.fail("must not spend"))
+    dump(packet, original)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "LOCAL_TEST_KEY")
+    run_packet(packet, results, execute=True, transport=fake_transport)
+    records = rows(results)
+    records[0]["result"]["judge_protocol"] = "preference_ab_v1"
+    results.write_text("".join(json.dumps(row)+"\n" for row in records))
+    with pytest.raises(ValueError, match="different prompt protocol"):
+        import_results(c, packet, results)
