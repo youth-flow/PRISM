@@ -187,3 +187,18 @@ DeepSeek探针1976711在bn030使用`http://174.0.250.13:3128`代理，真实返�
 旧排队作业会校验Git HEAD，因此新代码部署为独立源码版本目录；保留原model-smoke
 排队位置，替换尚未启动的旧rollout/Design依赖链。SFT基线生成也可在验收成功后
 提前与rollout并行，其输出仅作固定评价，不用于挑选训练参数。
+
+## gpu003 容器启动兼容（2026-11-14 13:20）
+
+原GPU验收1976660拿到卡后，在启动Apptainer时因`user namespace disabled`失败。
+CPU节点可运行同一SIF，不等于GPU节点的内核隔离设置相同。站点已提供
+`amd/singularity/3.10.4`（带管理员安装的setuid starter），可显式选择：
+
+```bash
+PRISM_CONTAINER_RUNTIME=singularity PRISM_ALLOW_SUBMIT=1 \
+  bash scripts/yancheng/submit.sh model-smoke --config /online1/.../frozen.yaml
+```
+
+脚本沿用原SIF和全部研究参数，只切换运行时命令、模块与环境变量前缀。
+CPU探针1976891的110项测试与完整输入校验通过；真实GPU仍需短作业验收。
+只有该验收成功，才放行rollout和基线生成。

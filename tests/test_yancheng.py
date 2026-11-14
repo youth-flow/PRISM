@@ -145,3 +145,13 @@ def test_container_test_uses_a_validated_unique_temporary_directory():
     assert 'trap \'rm -rf -- "$test_root"\' EXIT' in definition
     assert '--basetemp "$test_root/pytest"' in definition
     assert '--basetemp /tmp/prism-tests\n' not in definition
+
+
+def test_singularity_prefix_forwards_proxy_and_key_without_disclosing_values(platform):
+    _, _, repo, env = platform
+    bash = str(Path(shutil.which("git")).parents[1]/"bin/bash.exe") if os.name == "nt" else shutil.which("bash")
+    source = shlex.quote(shell_path(repo/"scripts/yancheng/common.sh"))
+    script = f"set -e\nsource {source}\nprism_forward_api_envs TEST_JUDGE_KEY\nprism_forward_proxy_envs\n[[ $SINGULARITYENV_TEST_JUDGE_KEY == fixture-only-key && $SINGULARITYENV_https_proxy == http://proxy.invalid:3128 ]]\nprintf passed"
+    result = subprocess.run([bash, "-c", script], env={**env, "PRISM_CONTAINER_RUNTIME": "singularity", "TEST_JUDGE_KEY": "fixture-only-key", "https_proxy": "http://proxy.invalid:3128"}, capture_output=True, text=True)
+    assert result.returncode == 0 and result.stdout == "passed"
+    assert "fixture-only-key" not in result.stdout + result.stderr

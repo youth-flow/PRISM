@@ -11,6 +11,10 @@ export PRISM_LOGS="${PRISM_ROOT}/logs"
 export PRISM_APPTAINER_CACHE="${PRISM_ROOT}/apptainer-cache"
 export PRISM_APPTAINER_TMP="${PRISM_ROOT}/apptainer-tmp"
 export PRISM_APPTAINER_MODULE="amd/apptainer/1.2.5"
+# Site-provided setuid Singularity can be selected on nodes where the rootless
+# Apptainer user-namespace workflow is unavailable. The SIF stays unchanged.
+export PRISM_CONTAINER_RUNTIME="apptainer"  # apptainer or singularity
+# export PRISM_CONTAINER_MODULE="amd/singularity/3.10.4"
 # Verified account/partitions on 2026-11-14, unlike the older manual examples.
 export PRISM_ACCOUNT="sc001"
 export PRISM_GPU_PARTITION="q_intel_gpu_nvidia_A100_share"

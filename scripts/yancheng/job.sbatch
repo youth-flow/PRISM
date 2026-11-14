@@ -19,8 +19,13 @@ jobroot="$PRISM_WORK/jobs/$SLURM_JOB_ID"
 mkdir -p "$jobroot/source" "$jobroot/tmp" "$jobroot/home" "$PRISM_APPTAINER_CACHE"
 prism_git archive "$PRISM_COMMIT" | tar -x -C "$jobroot/source"
 prism_load_apptainer
-export APPTAINER_CACHEDIR="$PRISM_APPTAINER_CACHE" APPTAINER_TMPDIR="$jobroot/tmp"
-export APPTAINERENV_PYTHONPATH=/opt/prism/src
+if [[ "$PRISM_CONTAINER_RUNTIME" == singularity ]]; then
+  export SINGULARITY_CACHEDIR="$PRISM_APPTAINER_CACHE" SINGULARITY_TMPDIR="$jobroot/tmp"
+else
+  export APPTAINER_CACHEDIR="$PRISM_APPTAINER_CACHE" APPTAINER_TMPDIR="$jobroot/tmp"
+fi
+runtime_prefix="$(prism_runtime_env_prefix)"
+export "${runtime_prefix}PYTHONPATH=/opt/prism/src"
 opts=(--cleanenv --no-home
   --bind "$jobroot/source:/opt/prism:ro" --bind "$PRISM_STORAGE:$PRISM_STORAGE"
   --bind "$jobroot/home:/prism-home" --bind "$PRISM_HF_CACHE:/hf"
@@ -46,11 +51,11 @@ if [[ "$stage" == cpu-smoke || "$stage" == stage-assets || "$stage" == prepare-d
 else
   opts+=(--env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1)
 fi
-runner=(apptainer exec "${opts[@]}" "$PRISM_IMAGE")
+runner=("$PRISM_CONTAINER_RUNTIME" exec "${opts[@]}" "$PRISM_IMAGE")
 
 if [[ "$stage" == cpu-smoke && -f "$PRISM_REPO/assets/ifeval/source-manifest.json" ]]; then
-  export APPTAINERENV_PRISM_TEST_IFEVAL_SOURCE="$PRISM_REPO/assets/ifeval"
-  export APPTAINERENV_PRISM_TEST_NLTK_DATA="$PRISM_REPO/assets/nltk_data"
+  export "${runtime_prefix}PRISM_TEST_IFEVAL_SOURCE=$PRISM_REPO/assets/ifeval"
+  export "${runtime_prefix}PRISM_TEST_NLTK_DATA=$PRISM_REPO/assets/nltk_data"
 fi
 
 if [[ "$stage" == label || "$stage" == evaluate-judge ]]; then
@@ -64,7 +69,7 @@ if [[ "$stage" == label || "$stage" == evaluate-judge ]]; then
     prism_forward_api_envs "${api_envs[@]}"
   fi
 fi
-echo "stage=$stage commit=$PRISM_COMMIT image=$PRISM_IMAGE_SHA256 job=$SLURM_JOB_ID"
+echo "stage=$stage commit=$PRISM_COMMIT image=$PRISM_IMAGE_SHA256 runtime=$PRISM_CONTAINER_RUNTIME job=$SLURM_JOB_ID"
 if [[ "$stage" == smoke ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
   "${runner[@]}" python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp "$jobroot/pytest"

@@ -13,4 +13,5 @@
 - CPU 可充分用于并行和数值计算，线程数跟随分配核心；GPU 每任务默认 1 张，通过独立分片/训练单元利用更多空闲卡，不空占卡。Rollout 分片保持全局 prompt 索引和原始 seed，合并前校验哈希、覆盖及顺序。不得未经适配就将单进程 PPO 改为多卡。
 - 已入队作业固定源码 commit。升级平台代码时使用 online1 下独立源码版本目录，保留原 GPU 验收作业的排队位置与原始源码，不因更新当前 HEAD 导致旧作业失效。
 - 登录节点 Git 为 1.8.3.1，平台脚本使用 `prism_git` 兼容函数，避免 `git -C`。
+- gpu003 的 rootless Apptainer 启动已实际失败（user namespace disabled）；站点提供 Singularity 3.10.4 的管理员安装 setuid starter。原 SIF 在该运行时的 CPU 全套测试和 ready 校验通过；用 `PRISM_CONTAINER_RUNTIME=singularity` 显式选择，并完成 GPU 验收后再放行后续计算。两种运行时的环境变量前缀须匹配。
 - `计算服务/` 与 `计算资源/` 包含私人账号与口令，保持 Git 忽略；平台配置、访问令牌和登录资料均不提交到公开仓库。

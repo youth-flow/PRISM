@@ -83,3 +83,11 @@
 - 计划使用8个单GPU数组任务（最多8并发），每个8 CPU/64G；不要求8张同时可用。CPU合并4核/6G，Design16核/24G，BLAS线程数绑定实际分配CPU。四个独立PPO仍各单GPU，未更改batch或episodes。
 - release `ed2791ddc0e26072e1638584a94ac176cd232d8e`在bn047的CPU作业1976721完成完整测试：**110 passed**，实际用时67秒，峰值RSS634176 KiB，含真实微型PPO、官方IFEval、本地与集群Judge、分片一致性和调度资源校验。测试未调用真实API或加载1B权重。
 - 保留1976660真实GPU验收的原始源码17b1791与排队位置；旧依赖作业1976662、1976663仍PENDING时撤下，没有中断运行或删除产物。新代码位于独立source-releases/ed2791d目录，避免更新原HEAD使已排队作业失效。
+
+## GPU 节点容器启动问题与现有运行时兼容 — 2026-11-14
+
+- GPU验收1976660实际于12:15:34在gpu003启动，12:15:43以FAILED/1:0结束。错误为`Failed to create user namespace: user namespace disabled`，发生在容器启动阶段，尚未执行Torch或加载1B模型。其后序依赖链因此失效，不能继续描述为正常GPU排队。
+- 13:18重新登录查询仍只有amd_share、gpu_nvidia_A100组及原A100分区。截图中运维同意开通公共队列，不作为新权限已生效的证据。AMD A100 share、A100_gb（使用要求的gpu:tesla:1语法）及4090 48G的test-only检查均被用户组权限拒绝。
+- 当前Apptainer安装只有非setuid starter；站点Singularity3.10.4/3.9.6有root拥有的setuid starter，配置允许setuid。没有更改系统内核参数或安装系统软件，使用站点已提供的正常运行方式兼容原SIF。
+- CPU探针1976891在bn076用Singularity3.10.4运行同一SHA256的SIF，63秒COMPLETED/0:0，**110 passed**，随后`validate --ready`通过。此结果证明该运行时与既有用户态依赖、数据和微型研究流程兼容，不代替真实GPU验收。
+- 平台支持显式选择apptainer或singularity，按运行时转发APPTAINERENV_/SINGULARITYENV_及缓存、代理。镜像、实验config、模型权重、数据划分及研究超参数不变；GPU短验收仍是后续作业的成功依赖。

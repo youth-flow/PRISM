@@ -9,13 +9,22 @@ prism_git() { (cd "$PRISM_REPO" && git "$@"); }
 # process itself from the canonical repository path under /online1.
 prism_exec_from_repo() { (cd "$PRISM_REPO" && "$@"); }
 
+prism_runtime_env_prefix() {
+  case "${PRISM_CONTAINER_RUNTIME:-apptainer}" in
+    apptainer) printf APPTAINERENV_ ;;
+    singularity) printf SINGULARITYENV_ ;;
+    *) prism_die "Container runtime must be apptainer or singularity" ;;
+  esac
+}
+
 prism_forward_api_envs() {
   # Names come from the validated config. Values remain in the process
   # environment, never Apptainer command-line flags or output.
-  local name target
+  local name target prefix
+  prefix="$(prism_runtime_env_prefix)" || return
   for name in "$@"; do
     [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || prism_die "Invalid API environment variable name"
-    target="APPTAINERENV_${name}"
+    target="${prefix}${name}"
     if [[ -v "$name" ]]; then
       export "$target=${!name}"
     elif [[ ! -v "$target" ]]; then
@@ -27,9 +36,10 @@ prism_forward_api_envs() {
 prism_forward_proxy_envs() {
   # The site proxy is not a credential, but cleanenv still removes it unless
   # it is explicitly forwarded. Keep the value out of constructed argv/logs.
-  local name target
+  local name target prefix
+  prefix="$(prism_runtime_env_prefix)" || return
   for name in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY; do
-    target="APPTAINERENV_${name}"
+    target="${prefix}${name}"
     if [[ -v "$name" ]]; then export "$target=${!name}"; fi
   done
 }
@@ -106,6 +116,13 @@ prism_load_apptainer() {
     [[ -r /etc/profile.d/modules.sh ]] && source /etc/profile.d/modules.sh
   fi
   type module >/dev/null 2>&1 || prism_die "Environment Modules unavailable"
-  module load "${PRISM_APPTAINER_MODULE:-amd/apptainer/1.2.5}"
-  command -v apptainer >/dev/null || prism_die "Apptainer module did not provide executable"
+  local runtime_module
+  PRISM_CONTAINER_RUNTIME="${PRISM_CONTAINER_RUNTIME:-apptainer}"
+  case "$PRISM_CONTAINER_RUNTIME" in
+    apptainer) runtime_module="${PRISM_CONTAINER_MODULE:-${PRISM_APPTAINER_MODULE:-amd/apptainer/1.2.5}}" ;;
+    singularity) runtime_module="${PRISM_CONTAINER_MODULE:-amd/singularity/3.10.4}" ;;
+    *) prism_die "Container runtime must be apptainer or singularity" ;;
+  esac
+  module load "$runtime_module"
+  command -v "$PRISM_CONTAINER_RUNTIME" >/dev/null || prism_die "Container module did not provide $PRISM_CONTAINER_RUNTIME"
 }
