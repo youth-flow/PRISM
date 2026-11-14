@@ -46,8 +46,9 @@ fi
 if [[ -n "${PRISM_QOS:-}" ]]; then args+=(--qos="$PRISM_QOS"); fi
 if [[ -n "${PRISM_EXCLUDE:-}" ]]; then args+=(--exclude="$PRISM_EXCLUDE"); fi
 if [[ -n "${PRISM_ARRAY:-}" ]]; then
-  [[ "$stage" == rollout-shard && "$PRISM_ARRAY" =~ ^0-([1-7])%([1-8])$ ]] || prism_die "Only 2..8 one-GPU rollout shards may use an array"
-  shard_count=$((BASH_REMATCH[1]+1))
+  [[ "$stage" == rollout-shard && "$PRISM_ARRAY" =~ ^0-([0-9]{1,2})%([1-8])$ ]] || prism_die "Rollout array needs 0-LAST%CONCURRENCY with concurrency 1..8"
+  shard_count=$((10#${BASH_REMATCH[1]}+1))
+  [[ "$shard_count" -ge 2 && "$shard_count" -le 32 ]] || prism_die "Rollout array must contain 2..32 one-GPU shards"
   declared_shards=""
   for ((i=0; i<${#cli[@]}; i++)); do
     if [[ "${cli[$i]}" == --shards && $((i+1)) -lt ${#cli[@]} ]]; then declared_shards="${cli[$((i+1))]}"; fi
@@ -56,7 +57,7 @@ if [[ -n "${PRISM_ARRAY:-}" ]]; then
   args+=(--array="$PRISM_ARRAY")
 fi
 if [[ -n "${PRISM_DEPENDENCY:-}" ]]; then
-  [[ "$PRISM_DEPENDENCY" =~ ^[0-9]+$ ]] || prism_die "Dependency must be one numeric job ID"
+  [[ "$PRISM_DEPENDENCY" =~ ^[0-9]+(:[0-9]+)*$ ]] || prism_die "Dependency must contain colon-separated numeric job IDs"
   args+=(--dependency="afterok:$PRISM_DEPENDENCY")
 fi
 command=(sbatch "${args[@]}" "$PRISM_REPO/scripts/yancheng/job.sbatch" "$stage" "$@")

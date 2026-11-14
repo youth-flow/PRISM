@@ -1,6 +1,7 @@
 """Stage boundaries are immutable; only Judge requests have append-only resume."""
 import json
 from pathlib import Path
+import time
 
 import numpy as np
 
@@ -28,6 +29,7 @@ def rollout(c, shard_index=None, shards=1):
     fresh(out / "pool.npz", out / "pool.jsonl")
     t, m = tokenizer(c), load_lm(c)
     features, logps, records = [], [], []
+    started, generated_tokens = time.monotonic(), 0
     for done, i in enumerate(indices):
         r = data[i]
         ids = prompt_ids(t, r["messages"], c["candidate"]["max_prompt_tokens"])
@@ -38,9 +40,11 @@ def rollout(c, shard_index=None, shards=1):
             ff.append(phi)
             ll.append(logp)
             records.append({"prompt_index": i, "candidate": j, "prompt_id": r["id"], "messages": r["messages"], "prompt_tokens": ids, "response_tokens": response, "response": t.decode(response, skip_special_tokens=True), "forced_feature_eos": response[-1] != t.eos_token_id})
+            generated_tokens += len(response)
         features.append(ff)
         logps.append(ll)
-        print(f"rollout {done+1}/{len(indices)} global_prompt={i}", flush=True)
+        elapsed = max(time.monotonic() - started, 1e-9)
+        print(f"rollout {done+1}/{len(indices)} global_prompt={i} tokens={generated_tokens} elapsed_seconds={elapsed:.1f} tokens_per_second={generated_tokens/elapsed:.2f}", flush=True)
     arrays = {"phi": np.asarray(features, dtype=np.float32), "logp": np.asarray(logps, dtype=np.float64)}
     extra = {}
     if shard_index is not None:

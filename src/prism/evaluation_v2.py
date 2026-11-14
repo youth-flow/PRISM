@@ -3,6 +3,7 @@ import csv
 import gc
 import json
 from pathlib import Path
+import time
 
 import numpy as np
 
@@ -29,6 +30,7 @@ def _benchmark_prompt_limit(c):
 def _generate(c, model, tokenizer, inputs, cap, temperature, offset=0, kl=False, prompt_limit=None):
     from .hf import generate, prompt_ids, sequence_stats
     result = []
+    started, generated_tokens = time.monotonic(), 0
     for i, record in enumerate(inputs):
         ids = prompt_ids(tokenizer, record["messages"], c["candidate"]["max_prompt_tokens"] if prompt_limit is None else prompt_limit)
         response = generate(model, tokenizer, ids, cap, c["evaluation"]["seed"]+offset+i, temperature=temperature)
@@ -43,6 +45,10 @@ def _generate(c, model, tokenizer, inputs, cap, temperature, offset=0, kl=False,
                 _, ref_logp = sequence_stats(model, ids, response, tokenizer.eos_token_id)
             row["sampled_sequence_log_ratio"] = float(logp-ref_logp)
         result.append(row)
+        generated_tokens += len(response)
+        if (i + 1) % max(1, len(inputs) // 20) == 0 or i + 1 == len(inputs):
+            elapsed = max(time.monotonic() - started, 1e-9)
+            print(f"evaluation_generate {i+1}/{len(inputs)} cap={cap} kl={kl} tokens={generated_tokens} elapsed_seconds={elapsed:.1f} tokens_per_second={generated_tokens/elapsed:.2f}", flush=True)
     return result
 
 

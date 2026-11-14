@@ -46,6 +46,8 @@ def test_gpu_cpu_routing_and_dependency(platform):
     assert cpu.returncode == 0, cpu.stderr
     assert "--gres" not in cpu.stdout and "afterok:123" in cpu.stdout
     assert "--partition=q_cpu_verified" in cpu.stdout
+    joined = run("--dry-run", "design", "--config", shell_path(cfg), overrides={"PRISM_DEPENDENCY": "123:456"})
+    assert joined.returncode == 0 and "afterok:123:456" in joined.stdout
     assert not (Path(repo).parent/"logs").exists()  # dry-run has no setup side effects
     api = run("--dry-run", "--resource", "cpu", "label", "--config", shell_path(cfg))
     assert api.returncode == 0, api.stderr
@@ -74,6 +76,8 @@ def test_opportunistic_shard_array_keeps_one_gpu_per_task(platform):
     result = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "8", overrides={"PRISM_ARRAY": "0-7%8"})
     assert result.returncode == 0, result.stderr
     assert "--array=0-7%8" in result.stdout and "--gres=gpu:1" in result.stdout
+    balanced = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "32", overrides={"PRISM_ARRAY": "0-31%8"})
+    assert balanced.returncode == 0 and "--array=0-31%8" in balanced.stdout
     mismatch = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "4", overrides={"PRISM_ARRAY": "0-7%8"})
     assert mismatch.returncode != 0
     training = run("--dry-run", "cluster-label", "--config", shell_path(cfg))

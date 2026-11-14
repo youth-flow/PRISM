@@ -75,3 +75,19 @@ def test_real_tiny_olmo_shards_match_unsharded_generation(tmp_path):
     with np.load(root(c) / "pool.npz", allow_pickle=False) as a, np.load(root(split) / "pool.npz", allow_pickle=False) as b:
         np.testing.assert_array_equal(a["phi"], b["phi"])
         np.testing.assert_array_equal(a["logp"], b["logp"])
+
+
+def test_32_small_shards_merge_with_uneven_last_groups(tmp_path, monkeypatch):
+    from prism.io import write_rows
+    c = config(tmp_path)
+    path = tmp_path / "more-design.jsonl"
+    write_rows(path, [{"id": str(i), "messages": [{"role": "user", "content": f"prompt {i}"}]} for i in range(40)])
+    c["choices"]["prompts"]["design"] = str(path)
+    install_backend(monkeypatch)
+    for shard in reversed(range(32)):
+        pipeline.rollout(c, shard_index=shard, shards=32)
+    result = pipeline.merge_rollout(c, shards=32)
+    assert result == {"prompts": 40, "responses": 160, "shards": 32}
+    records = rows(root(c) / "pool.jsonl")
+    assert [(r["prompt_index"], r["candidate"]) for r in records] == [(i, j) for i in range(40) for j in range(4)]
+    verify_receipt(root(c) / "pool.receipt.json")
