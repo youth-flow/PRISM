@@ -14,5 +14,6 @@
 - 已入队作业固定源码 commit。升级平台代码时使用 online1 下独立源码版本目录，保留原 GPU 验收作业的排队位置与原始源码，不因更新当前 HEAD 导致旧作业失效。
 - 登录节点 Git 为 1.8.3.1，平台脚本使用 `prism_git` 兼容函数，避免 `git -C`。
 - gpu003 的 rootless Apptainer 启动已实际失败（user namespace disabled）；现已使用站点 Singularity 3.10.4 的管理员安装 setuid starter，在 gpu056 完成真实 A100-SXM4-80GB/CUDA/OLMo1B/EOS-reward 验收（1977631，COMPLETED）。默认私有配置已切到 q_amd_gpu_nvidia_A100_share、gpu:tesla:1 和 Singularity；两种运行时的环境变量前缀须匹配。
-- 最终生成内容对照1977636确认固定版本自带模板正常输出，接近0的序列logp不是空EOS回答。保持原tokenizer模板、固定数据与研究参数，不因模型卡文字差异擅自修改输入格式。4090 48G队列权限已确认，但尚未完成该机型的真实模型验收，作为备用。
+- 最终生成内容对照1977636确认固定版本自带模板正常输出，接近0的序列logp不是空EOS回答。保持原tokenizer模板、固定数据与研究参数，不因模型卡文字差异擅自修改输入格式。4090队列真实验收1977820已通过CUDA前后向、OLMo生成与EOS reward，设备为NVIDIA GeForce RTX 4090、可见显存约44.5 GiB；完整PPO显存与耗时仍以正式训练为准。
+- 正式任务使用不可变源码目录source-releases/faffcbc；32片共享rollout与SFT基线在A100队列，四个独立单卡PPO及其评价生成安排在已验收的4090队列。调度依赖保证Design、标签、Reward、PPO、评价依次验收；不得将PENDING/Dependency记为已运行，也不因文档更新修改该源码目录。
 - `计算服务/` 与 `计算资源/` 包含私人账号与口令，保持 Git 忽略；平台配置、访问令牌和登录资料均不提交到公开仓库。

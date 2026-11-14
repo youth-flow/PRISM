@@ -213,3 +213,19 @@ CPU探针1976891的110项测试与完整输入校验通过；真实GPU仍需短�
 私有配置与示例默认GPU分区已更新为`q_amd_gpu_nvidia_A100_share`，
 GRES为`gpu:tesla:1`，运行时为Singularity。旧Intel A100分区与新4090 48G分区
 为备用；4090仅确认提交权限，使用该机型前仍需实机验收。
+
+2026-11-14正式启动更新：源码固定于`source-releases/faffcbc`，
+CPU验收1977805为110 passed、2 skipped（未为该release绑定官方checker测试资产），
+真实微型OLMo/TRL PPO与32片合并测试通过；官方checker已在此前资产验收中通过。
+ready作业1977811完整输入校验通过。SFT基线1977812与rollout数组1977813已在
+gpu056实际运行，合并1977814与Design1977815按成功依赖等待。
+首次实际分配为2张A100，不能将先前7张未分配的快照当作持续可用保证。
+
+4090验收1977820运行26秒COMPLETED：同一SIF、CUDA前后向、真实OLMo生成
+和EOS reward均通过，NVIDIA GeForce RTX 4090可见显存47800057856字节。
+后续四个独立PPO及其评价生成使用4090队列，首次完整PPO的显存与耗时尚待实测。
+候选共享pool仍在A100生成；不改变checkpoint、输入模板、seed、batch或训练预算。
+各单元通过成功依赖接续sample→cluster-label→reward→policy→evaluate-generate；
+同seed两方法生成完成后导出Luna数据包，本机调用OpenAI后再导回集群计分。
+运行目录内`launch-faffcbc.tsv`与`cells-launch-faffcbc.tsv`保存准确作业依赖，
+等待中的任务不占核或卡。DeepSeek与OpenAI调用位置及研究参数保持既定分工。
