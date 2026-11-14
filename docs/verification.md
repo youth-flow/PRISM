@@ -91,3 +91,14 @@
 - 当前Apptainer安装只有非setuid starter；站点Singularity3.10.4/3.9.6有root拥有的setuid starter，配置允许setuid。没有更改系统内核参数或安装系统软件，使用站点已提供的正常运行方式兼容原SIF。
 - CPU探针1976891在bn076用Singularity3.10.4运行同一SHA256的SIF，63秒COMPLETED/0:0，**110 passed**，随后`validate --ready`通过。此结果证明该运行时与既有用户态依赖、数据和微型研究流程兼容，不代替真实GPU验收。
 - 平台支持显式选择apptainer或singularity，按运行时转发APPTAINERENV_/SINGULARITYENV_及缓存、代理。镜像、实验config、模型权重、数据划分及研究超参数不变；GPU短验收仍是后续作业的成功依赖。
+
+## 最终准备条件验收 — 2026-11-14 17:43
+
+- 新权限已生效：用户组新增gpu_nvidia_A100_share、gpu_nvidia_4090_48g_share，AMD A100和4090 48G分区的单卡test-only请求均接受。三个GPU节点各8卡，共24张共享池卡；不等于个人独占24卡。新增GPU关联显示gpu=8限额、CPU关联cpu=2560，normal/standby的已查询QoS限额字段为空。
+- 快照：gpu003的8卡全部分配；gpu045的8卡中3张分配、5张未分配（平台标注4090 48GB，未实机验收）；gpu056的8卡中1张分配、7张未分配，另有1卡预留记录，实际可分配数以调度为准。CPU分区243节点/31104核，17:43报告20348空闲核。
+- Lustre个人配额复核为1 TiB/600000文件，已用10074800 KiB（约9.61 GiB）/8316文件；不是把整个online1的剩余空间当作个人配额。本机C盘剩余约42 GiB。
+- 本地、GitHub、集群主目录源码在检查时均为0d76656；工作区干净。config SHA256仍为98f6b8102fb6ab53d949b9b72b2769a8f89867386e5e676dda3f083fc933816e；SIF、模型权重及全部固定JSONL/manifest再次复核与前述哈希一致。
+- 本机OpenAI只读模型元数据请求HTTP200，配置的gpt-6-luna在可见模型列表中；此前真实最小Responses判断通过。DeepSeek重新在正式计算环境验证：1977630在bn030使用Singularity/官方代理，109输入/1输出token，返回A，请求1.854秒，COMPLETED/0:0。登录节点curl超时不被误当作计算节点API故障。
+- 真实GPU验收1977631在新AMD队列gpu056运行33秒COMPLETED/0:0：确认NVIDIA A100-SXM4-80GB、CUDA前后向、真实1B加载生成和EOS/Reward适配通过，适配误差约6.31e-8。此前失效的旧队列等待链已撤下，没有正式训练产物被删除。
+- 对验收中接近0的logp进一步做内容检查：1977636在gpu056对3个短prompt比较固定tokenizer模板与模型卡无BOS格式；原模板分别生成13/17/28 tokens，回答非空，列表题正确抽出前6项。两次相同的短答案属于高置信输出，不是只生成EOS。保持固定版本自带模板，不改科研格式或参数。额外探针1977632因诊断脚本错误假设GPU节点有/etc/profile.d/modules.sh而在0秒退出；复用正式模块入口后重试成功，该失败未产生研究产物。
+- 私有env已备份并切到验证过的Singularity3.10.4、q_amd_gpu_nvidia_A100_share和gpu:tesla:1；提交默认仍为0，阶段执行单次启用。正式rollout、Design、4096训练标签、四份PPO和6000次评价判断均尚未开始，不能把准备验收当作完整实验完成。

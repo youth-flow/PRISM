@@ -13,14 +13,14 @@ export PRISM_APPTAINER_TMP="${PRISM_ROOT}/apptainer-tmp"
 export PRISM_APPTAINER_MODULE="amd/apptainer/1.2.5"
 # Site-provided setuid Singularity can be selected on nodes where the rootless
 # Apptainer user-namespace workflow is unavailable. The SIF stays unchanged.
-export PRISM_CONTAINER_RUNTIME="apptainer"  # apptainer or singularity
-# export PRISM_CONTAINER_MODULE="amd/singularity/3.10.4"
+export PRISM_CONTAINER_RUNTIME="singularity"  # Verified on gpu056 with the unchanged SIF.
+export PRISM_CONTAINER_MODULE="amd/singularity/3.10.4"
 # Verified account/partitions on 2026-11-14, unlike the older manual examples.
 export PRISM_ACCOUNT="sc001"
-export PRISM_GPU_PARTITION="q_intel_gpu_nvidia_A100_share"
+export PRISM_GPU_PARTITION="q_amd_gpu_nvidia_A100_share"
 export PRISM_CPU_PARTITION="q_amd_share"
 export PRISM_QOS=""                 # Account offers normal,standby; keep site default.
-export PRISM_GPU_GRES="gpu:1"       # One process, one A100; no exclusive node.
+export PRISM_GPU_GRES="gpu:tesla:1" # One process, one A100; no exclusive node.
 export PRISM_GPU_MODEL="A100"
 # submit.sh supplies audited per-stage defaults. Set any of these only as an
 # explicit one-invocation override after inspecting the relevant pilot log.

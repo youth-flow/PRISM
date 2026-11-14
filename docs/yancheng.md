@@ -202,3 +202,9 @@ PRISM_CONTAINER_RUNTIME=singularity PRISM_ALLOW_SUBMIT=1 \
 脚本沿用原SIF和全部研究参数，只切换运行时命令、模块与环境变量前缀。
 CPU探针1976891的110项测试与完整输入校验通过；真实GPU仍需短作业验收。
 只有该验收成功，才放行rollout和基线生成。
+
+2026-11-14 17:43更新：GPU验收1977631已在gpu056以Singularity3.10.4通过，
+实测卡型NVIDIA A100-SXM4-80GB；原SIF与全部研究超参数保持不变。
+私有配置与示例默认GPU分区已更新为`q_amd_gpu_nvidia_A100_share`，
+GRES为`gpu:tesla:1`，运行时为Singularity。旧Intel A100分区与新4090 48G分区
+为备用；4090仅确认提交权限，使用该机型前仍需实机验收。

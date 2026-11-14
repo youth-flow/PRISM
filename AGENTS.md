@@ -13,5 +13,6 @@
 - CPU 可充分用于并行和数值计算，线程数跟随分配核心；GPU 每任务默认 1 张，通过独立分片/训练单元利用更多空闲卡，不空占卡。Rollout 分片保持全局 prompt 索引和原始 seed，合并前校验哈希、覆盖及顺序。不得未经适配就将单进程 PPO 改为多卡。
 - 已入队作业固定源码 commit。升级平台代码时使用 online1 下独立源码版本目录，保留原 GPU 验收作业的排队位置与原始源码，不因更新当前 HEAD 导致旧作业失效。
 - 登录节点 Git 为 1.8.3.1，平台脚本使用 `prism_git` 兼容函数，避免 `git -C`。
-- gpu003 的 rootless Apptainer 启动已实际失败（user namespace disabled）；站点提供 Singularity 3.10.4 的管理员安装 setuid starter。原 SIF 在该运行时的 CPU 全套测试和 ready 校验通过；用 `PRISM_CONTAINER_RUNTIME=singularity` 显式选择，并完成 GPU 验收后再放行后续计算。两种运行时的环境变量前缀须匹配。
+- gpu003 的 rootless Apptainer 启动已实际失败（user namespace disabled）；现已使用站点 Singularity 3.10.4 的管理员安装 setuid starter，在 gpu056 完成真实 A100-SXM4-80GB/CUDA/OLMo1B/EOS-reward 验收（1977631，COMPLETED）。默认私有配置已切到 q_amd_gpu_nvidia_A100_share、gpu:tesla:1 和 Singularity；两种运行时的环境变量前缀须匹配。
+- 最终生成内容对照1977636确认固定版本自带模板正常输出，接近0的序列logp不是空EOS回答。保持原tokenizer模板、固定数据与研究参数，不因模型卡文字差异擅自修改输入格式。4090 48G队列权限已确认，但尚未完成该机型的真实模型验收，作为备用。
 - `计算服务/` 与 `计算资源/` 包含私人账号与口令，保持 Git 忽略；平台配置、访问令牌和登录资料均不提交到公开仓库。
