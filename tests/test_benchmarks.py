@@ -1,12 +1,13 @@
 """Adapter contracts plus an opt-in integration test of the genuine checker."""
 import json
+import hashlib
 import os
 from pathlib import Path
 
 import pytest
 
 from prism.benchmarks import (IFEVAL_SOURCE_REVISION, benchmark_rows, score_benchmark,
-                              stage_ifeval_sources, validate_benchmark_backend)
+                              stage_ifeval_resources, stage_ifeval_sources, validate_benchmark_backend)
 from prism.io import write_rows
 
 
@@ -75,6 +76,22 @@ def test_explicit_staging_is_small_immutable_and_checks_corruption(tmp_path, mon
     (destination/"instruction_following_eval/instructions.py").write_text("changed")
     with pytest.raises(ValueError, match="source hash changed"):
         stage_ifeval_sources(destination, revision)
+
+
+def test_nltk_staged_resources_are_verified_without_network(tmp_path, monkeypatch):
+    import nltk
+    resource = tmp_path / "tokenizers" / "punkt_tab" / "english" / "sample.txt"
+    resource.parent.mkdir(parents=True)
+    resource.write_bytes(b"fixture-only")
+    manifest = {"nltk_version": nltk.__version__, "resources": ["punkt", "punkt_tab"],
+                "files": {"tokenizers\\punkt_tab\\english\\sample.txt": hashlib.sha256(resource.read_bytes()).hexdigest()}}
+    (tmp_path / "resource-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(nltk, "download", lambda *args, **kwargs: pytest.fail("must reuse verified offline assets"))
+    c = {"choices": {"benchmark": {"kind": "ifeval"}}, "benchmark": {"nltk_data_path": str(tmp_path)}}
+    assert stage_ifeval_resources(c) == manifest
+    resource.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="resource hash changed"):
+        stage_ifeval_resources(c)
 
 
 def test_genuine_official_ifeval_checker_when_explicitly_staged(tmp_path):

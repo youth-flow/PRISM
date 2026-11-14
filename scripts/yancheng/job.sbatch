@@ -28,6 +28,7 @@ opts=(--cleanenv --no-home
   --env PYTHONPATH=/opt/prism/src --env HF_HOME=/hf --env TMPDIR="$jobroot/tmp"
   --env "OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-8}" --env TOKENIZERS_PARALLELISM=false
   --env "SLURM_JOB_ID=$SLURM_JOB_ID" --env "PRISM_GPU_MODEL=${PRISM_GPU_MODEL:-A100}")
+opts+=(--env "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-1}")
 if [[ "$gpu" == 1 ]]; then
   [[ "$SLURM_JOB_PARTITION" == "$PRISM_GPU_PARTITION" ]] || prism_die "Unexpected GPU partition"
   opts+=(--nv)
@@ -67,6 +68,9 @@ if [[ "$stage" == smoke ]]; then
   "${runner[@]}" python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp "$jobroot/pytest"
 elif [[ "$stage" == cpu-smoke ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_cpu.py "$@"
+elif [[ "$stage" == model-smoke ]]; then
+  "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
+  "${runner[@]}" python -m prism.cli "$stage" "$@"
 elif [[ "$stage" == judge-export || "$stage" == judge-import ]]; then
   "${runner[@]}" python -m prism.local_judge "${stage#judge-}" "$@"
 else

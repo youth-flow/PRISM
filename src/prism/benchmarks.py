@@ -268,12 +268,24 @@ def stage_ifeval_resources(c):
     destination = Path(configured).resolve()
     destination.mkdir(parents=True, exist_ok=True)
     resources = ("punkt", "punkt_tab")
+    manifest_path = destination / "resource-manifest.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("nltk_version") != nltk.__version__ or manifest.get("resources") != list(resources) or not manifest.get("files"):
+            raise ValueError("Staged NLTK resource manifest does not match the runtime")
+        for relative, expected in manifest["files"].items():
+            # Older Windows staging manifests used backslashes. The actual
+            # archive paths are portable; accept both separators when verifying.
+            file = (destination / relative.replace("\\", "/")).resolve()
+            if not file.is_relative_to(destination) or not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != expected:
+                raise ValueError(f"Staged NLTK resource hash changed: {relative}")
+        return manifest
     for resource in resources:
         if not nltk.download(resource, download_dir=str(destination), quiet=True, raise_on_error=True):
             raise RuntimeError(f"NLTK resource staging failed: {resource}")
     manifest = {"nltk_version": nltk.__version__, "resources": list(resources), "files": {
-        str(file.relative_to(destination)): hashlib.sha256(file.read_bytes()).hexdigest()
+        file.relative_to(destination).as_posix(): hashlib.sha256(file.read_bytes()).hexdigest()
         for file in sorted((destination/"tokenizers").rglob("*")) if file.is_file()
     }}
-    (destination/"resource-manifest.json").write_text(json.dumps(manifest, indent=2)+"\n", encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest, indent=2)+"\n", encoding="utf-8")
     return manifest
