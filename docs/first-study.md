@@ -1,6 +1,6 @@
 # 第一版小规模实验：最终配置与执行分层
 
-本版唯一执行配置是 [`configs/experiment.yaml`](../configs/experiment.yaml)。`study-plan.yaml` 只保留说明入口，不再复制参数。配置已经冻结为单一标签预算；当前仍处于准备阶段，不自动提交集群作业或消耗 API 额度。
+本版唯一执行配置是 [`configs/experiment.yaml`](../configs/experiment.yaml)。`study-plan.yaml` 只保留说明入口，不再复制参数。配置已经冻结为单一标签预算；用户于2026-11-14明确授权开始实验，并指定两个API Judge均在本机执行。集群仅为已检查的必要阶段单次开启提交。
 
 ## 1. 最终实验矩阵
 
@@ -101,9 +101,9 @@ Actor更新LoRA，关闭adapter即reference；reward始终取独立冻结SFT的E
 
 Benchmark另用greedy、最多2048新tokens，不受同源KL的512上限约束。IFEval调用原始Google checker，不能用exact-match替代。官方源码/资源在明确的准备阶段下载，验证和计分过程离线。
 
-API调用默认被`execution.allow_paid_api_calls: false`阻断，集群仍由`PRISM_ALLOW_SUBMIT=0`阻断。以后明确开跑时，在新配置/output中启用所需开关，并在环境中提供DEEPSEEK_API_KEY、OPENAI_API_KEY；不写进YAML、命令参数或Git。调用日志记录usage/失败/重试，目前不宣称有跨进程总费用硬上限或Batch实现。
+集群config保持`execution.allow_paid_api_calls: false`，避免集群直接请求API。`prism.local_judge export`将已核验依赖的请求导出为带哈希的数据包；本机`run --execute`只在调用进程中授权付费，使用同一个API适配器；回传后`import`校验配置、依赖哈希和请求内容，并让原有label/evaluate-judge阶段重放真实结果、生成集群路径receipt。调用日志记录usage/失败/重试，目前不宣称有跨进程总费用硬上限或Batch实现。
 
-`resource`命令从Judge后端计算API标注/评价为CPU、本地HF Judge为GPU。盐城wrapper接受`--resource cpu|gpu`，例如未来API标注阶段可使用`submit.sh --resource cpu label ...`；Bash不自行解析YAML。API阶段单独分配CPU，避免占GPU等待。若要把阶段移到另一台电脑，需要显式导出/导入结果包；当前receipt包含绝对路径，不能直接搬动已冻结的实验目录。
+`resource`命令从Judge后端计算API标注/评价为CPU、本地HF Judge为GPU。当前API阶段使用本地调用路线，集群只运行`judge-export`和`judge-import`两个短CPU操作。数据包包含prompt、回答和固定调用顺序，不包含模型权重或密钥；成功调用断点复用，重复抽中的不同draw仍独立标注。当前receipt包含绝对路径，不能直接搬动已冻结的实验目录；导入通过原阶段生成正确路径的receipt。
 
 Apptainer使用cleanenv；wrapper先读取已验证config中的当前Judge角色变量名，再将任务环境中的对应密钥安全转为`APPTAINERENV_<api_key_env>`，也接受预先设置的该前缀变量。只在进程环境传递值，不放入`--env KEY=value`命令参数或日志。CPU-only请求在当前GPU分区能否被调度接受，仍待未来实际验收。
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from .design import edges, empirical, frank_wolfe, proxy
-from .io import METHODS, cell, digest, dump, fresh, prompt_rows, receipt, root, rows, verify_receipt, write_rows
+from .io import cell, digest, dump, fresh, prompt_rows, receipt, root, rows, verify_receipt, write_rows
 from .reward import fit_bt
 
 
@@ -81,8 +81,8 @@ def _freeze_rows(path, data):
         write_rows(path, data)
 
 
-def label(c, method, budget, seed):
-    from .judges import judge_settings, make_judge
+def label(c, method, budget, seed, *, judge_factory=None):
+    from .judges import judge_settings, make_judge, training_call_seed
     p, out = root(c), cell(c, method, budget, seed)
     verify_receipt(p / "pool.receipt.json")
     verify_receipt(p / "design.receipt.json")
@@ -113,13 +113,10 @@ def label(c, method, budget, seed):
         for attempt in range(attempts, judge_settings(c, "training")["max_attempts"]):
             # Prefix budgets share the SAME observation. Distinct draw IDs, even
             # for a repeated edge, always receive separate calls.
-            seed_parts = [seed, METHODS.index(method), k, attempt, 991]
-            if coupling == "independent":
-                seed_parts.insert(1, budget)
-            call_seed = int(np.random.SeedSequence(seed_parts).generate_state(1)[0])
+            call_seed = training_call_seed(seed, method, budget, k, attempt, coupling)
             flip = bool(np.random.default_rng(call_seed).integers(2))
             if judge is None:
-                judge = make_judge(c, "training")
+                judge = (judge_factory or make_judge)(c, "training")
             result = {**query, "attempt": attempt, **judge.call(a["messages"], a["response"], b["response"], call_seed, flip)}
             with calls.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(result, ensure_ascii=False) + "\n")

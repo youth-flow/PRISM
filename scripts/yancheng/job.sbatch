@@ -62,6 +62,8 @@ if [[ "$stage" == smoke ]]; then
   "${runner[@]}" python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp "$jobroot/pytest"
 elif [[ "$stage" == cpu-smoke ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_cpu.py
+elif [[ "$stage" == judge-export || "$stage" == judge-import ]]; then
+  "${runner[@]}" python -m prism.local_judge "${stage#judge-}" "$@"
 else
   "${runner[@]}" python -m prism.cli "$stage" "$@"
 fi

@@ -38,7 +38,7 @@ prism_stage_gpu() {
   local gpu=0
   case "$1" in
     smoke|model-smoke|rollout|label|policy|evaluate-reference|evaluate-generate|evaluate-judge) gpu=1 ;;
-    cpu-smoke|stage-assets|prepare-data|design|sample|reward|aggregate|validate) gpu=0 ;;
+    cpu-smoke|stage-assets|prepare-data|design|sample|reward|aggregate|validate|judge-export|judge-import) gpu=0 ;;
     *) prism_die "Unknown stage: $1" ;;
   esac
   # The Python config/backend layer computes resource needs. Bash receives that
@@ -74,7 +74,7 @@ prism_stage_resources() {
       reward) PRISM_DEFAULT_CPUS=8 PRISM_DEFAULT_MEMORY=12G PRISM_DEFAULT_TIME=04:00:00 ;;
       label) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=12:00:00 ;;
       evaluate-judge) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=18:00:00 ;;
-      aggregate|validate) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=01:00:00 ;;
+      aggregate|validate|judge-export|judge-import) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=01:00:00 ;;
       *) prism_die "No CPU resource profile for stage: $stage" ;;
     esac
   fi

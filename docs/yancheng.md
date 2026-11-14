@@ -108,3 +108,43 @@ API调用还需显式开启实验config里的`execution.allow_paid_api_calls`。
 哈希和本机两个真实API账户已经验收。仍待真实CPU容器smoke、正式数据/模型
 资产准备、`validate --ready`、真实OLMo/A100 model smoke以及本地Judge产物同步
 流程。不要把Slurm权限、文件哈希或最小API请求解释为完整实验已通过。
+
+## 本机 API Judge 与集群结果交换（2026-11-14）
+
+用户已授权开始实验，并指定DeepSeek与Luna两种API调用均在本机执行。
+集群config仍关闭直接API请求，私有密钥不上传。逻辑阶段顺序不变，
+label/evaluate-judge各拆成集群导出、本机调用、集群导入三个执行动作。
+
+计算节点通过wrapper导出一个单元（PATH需替换为实际绝对路径）：
+
+```bash
+PRISM_ALLOW_SUBMIT=1 bash scripts/yancheng/submit.sh judge-export \
+  --config /online1/.../frozen.yaml --stage label \
+  --method prism --budget 1024 --seed 11 --packet /online1/.../prism11.packet.json
+```
+
+用scp下载packet，在Windows执行：
+
+```powershell
+.\scripts\windows\run_local_judge.ps1 -Packet local\prism11.packet.json -Results local\prism11.results.jsonl -Execute
+```
+
+脚本从被忽略的`计算资源/api.md`读取两个key，默认4个并发请求，
+只在子进程环境中传入，结束后恢复环境；日志含usage而不含key。
+重新运行同一packet/results会跳过成功调用。失败重试也会保留并计入调用量。
+
+将结果上传回online1，再运行：
+
+```bash
+PRISM_ALLOW_SUBMIT=1 bash scripts/yancheng/submit.sh judge-import \
+  --config /online1/.../frozen.yaml --packet /online1/.../prism11.packet.json \
+  --results /online1/.../prism11.results.jsonl
+```
+
+导入核对packet哈希、冻结config、输入内容、调用seed、AB/BA和原始判断，
+不进行网络调用；已有成功/失败记录与receipt由原阶段代码处理。
+judge-export/import只申请1 CPU与1500M内存，不占GPU。
+
+实际CPU短作业1976605于2026-11-14在bn030立即启动，容器和Python正常启动；
+计算节点经官方代理访问Hugging Face得到CONNECT 503，作业因此失败。
+固定资产改为本机下载、核验并上传，数据准备与模型计算仍在计算节点执行。

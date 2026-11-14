@@ -8,7 +8,7 @@ import numpy as np
 
 from .benchmarks import benchmark_rows, score_benchmark, validate_benchmark_backend
 from .io import cell, dump, fresh, prompt_rows, receipt, root, rows, verify_receipt, write_rows
-from .judges import judge_settings, make_judge
+from .judges import evaluation_call_seed, judge_settings, make_judge
 
 
 def _reference(c):
@@ -161,7 +161,7 @@ def _comparison(c, comp, data, complete, budget, seed, index):
             "per_prompt": per_prompt}
 
 
-def evaluate_judge(c, method, budget, seed):
+def evaluate_judge(c, method, budget, seed, *, judge_factory=None):
     draws = c["evaluation"].get("bootstrap_samples", 2000)
     if type(draws) is not int or draws < 0:
         raise ValueError("evaluation.bootstrap_samples must be a nonnegative integer")
@@ -197,8 +197,8 @@ def evaluate_judge(c, method, budget, seed):
                 attempts = sum((r["comparison"], r["index"], r["order"]) == key for r in previous)
                 for attempt in range(attempts, settings["max_attempts"]):
                     if judge is None:
-                        judge = make_judge(c, "evaluation")
-                    call_seed = int(np.random.SeedSequence([c["evaluation"]["seed"], budget, seed, comparison_index, i, order_index, attempt, 197]).generate_state(1)[0])
+                        judge = (judge_factory or make_judge)(c, "evaluation")
+                    call_seed = evaluation_call_seed(c, budget, seed, comparison_index, i, order_index, attempt)
                     result = judge.call(prompt["messages"], sources[comp["left"]][i]["response"], sources[comp["right"]][i]["response"], call_seed, order == "BA")
                     # Adapter label is already canonical-left even for BA.
                     if result.get("label") is not None and (type(result["label"]) not in (int, float) or result["label"] not in (0, 0.5, 1)):

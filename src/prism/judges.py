@@ -41,6 +41,20 @@ def requires_gpu(c, role="training"):
     return judge_settings(c, role)["backend"] == "hf"
 
 
+def training_call_seed(seed, method, budget, draw, attempt, coupling):
+    import numpy as np
+    from .io import METHODS
+    parts = [seed, METHODS.index(method), draw, attempt, 991]
+    if coupling == "independent":
+        parts.insert(1, budget)
+    return int(np.random.SeedSequence(parts).generate_state(1)[0])
+
+
+def evaluation_call_seed(c, budget, seed, comparison, prompt, order, attempt):
+    import numpy as np
+    return int(np.random.SeedSequence([c["evaluation"]["seed"], budget, seed, comparison, prompt, order, attempt, 197]).generate_state(1)[0])
+
+
 def _messages(messages, a, b, role):
     return [
         {"role": "system", "content": _TRAIN_SYSTEM if role == "training" else _EVAL_SYSTEM},
