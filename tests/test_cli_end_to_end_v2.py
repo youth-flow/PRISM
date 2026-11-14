@@ -82,7 +82,7 @@ def test_shipped_config_drives_every_stage_from_another_directory(tmp_path, monk
         calls[role].append(payload)
         if role == "training":
             return {"id": "simulated-training", "model": payload["model"],
-                    "choices": [{"message": {"content": "A"}, "finish_reason": "stop"}],
+                    "choices": [{"message": {"content": '{"preferred_response":"response_A"}'}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 10, "completion_tokens": 1}}, "mock-request"
         return {"id": "simulated-evaluation", "model": payload["model"], "status": "completed",
                 "output": [{"type": "message", "role": "assistant",

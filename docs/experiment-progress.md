@@ -173,3 +173,14 @@ PRISM23=1978677，源4c418f7，各2 CPU/3G、4 API workers，共16并发。
 保持比较准则和二元偏好含义，先验证真实失败题与已知偏好对照；
 原Design、固定queries、模型与研究配置保持不变。上述耗时估计适用于接口稳定后，
 当前修复尚未完成，不能据此承诺本阶段结束时间。
+
+结构化训练协议候选`preference_response_json_v3`：调用同一个DeepSeek v1
+Chat Completions端点，新增原生`response_format={type: json_object}`，输出只允许
+单字段`preferred_response=response_A|response_B`，再按原展示flip映射到0/1。
+比较准则、模型、temperature=1、thinking=disabled、max_tokens=64、3次尝试
+和timeout=60均保持原值；这是显式的输出编码/提示协议修订，不声称字节级提示不变。
+JSON mode仅保证JSON语法，候选ID/键集合/重复键/截断仍由客户端严格验收；
+禁止从原题选项推断标签。旧v1/v2批次不混用。OpenAI评价保持原v1协议。
+本机33项接口、原始答案方向及数据包专项通过（另1项依赖Torch留待完整集群检查）。
+真实回归将包含新增失败task99、顽固task17重复展示与已知偏好对照；
+除原网络重试外，还要求该诊断没有输出格式错误，随后才考虑完整标注。

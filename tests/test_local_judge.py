@@ -13,7 +13,7 @@ def fake_transport(url, payload, key, timeout):
     assert key == "LOCAL_TEST_KEY"
     if url.endswith("/responses"):
         return {"status": "completed", "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "TIE"}]}], "usage": {"input_tokens": 9, "output_tokens": 1}}, "test-eval"
-    return {"choices": [{"message": {"content": "A"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 9, "completion_tokens": 1}}, "test-train"
+    return {"choices": [{"message": {"content": '{"preferred_response":"response_A"}'}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 9, "completion_tokens": 1}}, "test-train"
 
 
 def test_evaluation_packet_round_trip_resume_and_input_binding(tmp_path, monkeypatch):

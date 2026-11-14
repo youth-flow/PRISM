@@ -125,7 +125,7 @@ def _records(packet, results):
         if key in indexed or result.get("seed") != call["seed"] or result.get("flip") != call["flip"]:
             raise ValueError("Duplicate or misaligned Judge result")
         label = result.get("label")
-        if label is not None and (type(label) not in (int, float) or label not in (0, 0.5, 1) or label != _parse(result.get("raw", ""), packet["role"], call["flip"])):
+        if label is not None and (type(label) not in (int, float) or label not in (0, 0.5, 1) or label != _parse(result.get("raw", ""), packet["role"], call["flip"], protocol=packet.get("judge_protocol", legacy))):
             raise ValueError("Judge label does not match its raw answer/order")
         if packet["role"] == "training" and label == 0.5:
             raise ValueError("Training Judge cannot return a tie")

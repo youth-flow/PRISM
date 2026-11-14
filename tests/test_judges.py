@@ -26,7 +26,7 @@ def test_deepseek_payload_orientation_and_usage(monkeypatch):
     def transport(url, payload, api_key, timeout):
         seen.append((url, payload, timeout))
         return {"id": "response-1", "model": "served-version", "system_fingerprint": "fp",
-                "choices": [{"message": {"content": "A"}, "finish_reason": "stop"}],
+                "choices": [{"message": {"content": '{"preferred_response":"response_A"}'}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 250, "completion_tokens": 1,
                           "prompt_cache_hit_tokens": 10, "arbitrary_string": "ignored"}}, "request-1"
     judge = make_judge(config(), transport=transport)
@@ -37,7 +37,8 @@ def test_deepseek_payload_orientation_and_usage(monkeypatch):
     assert payload["max_tokens"] == 64 and "seed" not in payload and "tools" not in payload
     displayed = json.loads(payload["messages"][1]["content"])
     assert displayed["response_A"] == "canonical second"
-    assert result["judge_protocol"] == "preference_ab_task_boundary_v2"
+    assert payload["response_format"] == {"type": "json_object"}
+    assert result["judge_protocol"] == "preference_response_json_v3"
     assert result["label"] == 0 and result["model"] == "served-version"
     assert result["request_id"] == "request-1" and result["response_id"] == "response-1"
     assert result["usage"] == {"prompt_tokens": 250, "completion_tokens": 1, "prompt_cache_hit_tokens": 10}
@@ -52,12 +53,38 @@ def test_multiple_choice_conversation_is_preserved_as_comparison_data(monkeypatc
         assert data["conversation"] == messages
         assert data["response_A"] == "(D)" and data["response_B"] == "(C)"
         assert list(data)[-1] == "evaluation_instruction"
-        assert "not multiple-choice options" in data["evaluation_instruction"]
-        assert "Do not answer the conversation yourself" in data["evaluation_instruction"]
+        assert "Do not solve the original task" in data["evaluation_instruction"]
+        assert "response_A or response_B" in data["evaluation_instruction"]
         assert payload["max_tokens"] == 64 and payload["temperature"] == 1
-        return {"choices": [{"message": {"content": "A"}, "finish_reason": "stop"}]}, None
+        assert payload["response_format"] == {"type": "json_object"}
+        return {"choices": [{"message": {"content": '{"preferred_response":"response_A"}'}, "finish_reason": "stop"}]}, None
     result = make_judge(config(), transport=transport).call(messages, "(D)", "(C)", 5, False)
     assert result["label"] == 1
+
+
+@pytest.mark.parametrize("text", ['D', '(D)', 'A', '{"preferred_response":"D"}',
+                                 '{"answer":"response_A"}', '{"preferred_response":true}',
+                                 '{"preferred_response":["response_A"]}', 'null',
+                                 '[{"preferred_response":"response_A"}]',
+                                 '{"preferred_response":"response_A","explanation":"x"}',
+                                 '{"preferred_response":"response_A","preferred_response":"response_B"}',
+                                 '{"preferred_response":"response_A"} extra', '   '])
+def test_structured_preference_rejects_ambiguous_or_non_schema_answers(monkeypatch, text):
+    monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
+    response = {"choices": [{"message": {"content": text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 17, "completion_tokens": 9}}
+    result = make_judge(config(), transport=lambda *a: (response, None)).call([], "(D)", "(C)", 2, False)
+    assert result["label"] is None and result["error"]["type"] == "invalid_judgment_format"
+    assert result["raw"] == text and result["usage"]["completion_tokens"] == 9
+
+
+@pytest.mark.parametrize("preferred,flip,label", [("response_A",False,1),("response_A",True,0),
+                                                 ("response_B",False,0),("response_B",True,1)])
+def test_structured_preference_orientation(preferred, flip, label, monkeypatch):
+    monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
+    text = json.dumps({"preferred_response": preferred})
+    result = make_judge(config(), transport=lambda *a: ({"choices": [{"message": {"content": text}, "finish_reason": "stop"}]}, None)).call([], "x", "y", 0, flip)
+    assert result["label"] == label
 
 
 def test_openai_responses_reads_final_text_not_reasoning_and_accepts_tie(monkeypatch):
