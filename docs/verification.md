@@ -74,3 +74,12 @@
 
 本节点未完成真实1B/A100验收、正式rollout/PPO或批量Judge调用。模型大包上传、
 集群端权重哈希及真实GPU model-smoke为接续步骤，不能把CPU测试替代为真实模型效果证据。
+
+## 集群 DeepSeek 与机会式多 GPU 并行 — 2026-11-14
+
+- 用户更新执行位置：DeepSeek训练Judge在集群经官方代理调用，OpenAI/Luna评价Judge保留本机。真实CPU探针1976711在bn030经`http://174.0.250.13:3128`完成DeepSeek请求，返回有效A，109输入/1输出token，请求1.962秒，作业COMPLETED/0:0。只部署DeepSeek key到仓库外私有文件，目录700/文件600；OpenAI key未上传。
+- 新增cluster_judge在集群CPU执行请求包、4并发调用及原阶段结果导入；只允许DeepSeek training后端。冻结config、API模型、参数及标签预算均不变，付费许可只在显式执行器进程中开启。
+- 共享rollout新增独立prompt分片与CPU合并。每条候选仍使用原全局索引生成seed；全部分片完备、哈希及顺序匹配后才发布pool。真实tiny OLMo的顺序/分片输出文本、token、EOS特征、logp逐项一致。缺失/损坏分片拒绝合并。
+- 计划使用8个单GPU数组任务（最多8并发），每个8 CPU/64G；不要求8张同时可用。CPU合并4核/6G，Design16核/24G，BLAS线程数绑定实际分配CPU。四个独立PPO仍各单GPU，未更改batch或episodes。
+- release `ed2791ddc0e26072e1638584a94ac176cd232d8e`在bn047的CPU作业1976721完成完整测试：**110 passed**，实际用时67秒，峰值RSS634176 KiB，含真实微型PPO、官方IFEval、本地与集群Judge、分片一致性和调度资源校验。测试未调用真实API或加载1B权重。
+- 保留1976660真实GPU验收的原始源码17b1791与排队位置；旧依赖作业1976662、1976663仍PENDING时撤下，没有中断运行或删除产物。新代码位于独立source-releases/ed2791d目录，避免更新原HEAD使已排队作业失效。
