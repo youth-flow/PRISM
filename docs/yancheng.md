@@ -148,3 +148,16 @@ judge-export/import只申请1 CPU与1500M内存，不占GPU。
 实际CPU短作业1976605于2026-11-14在bn030立即启动，容器和Python正常启动；
 计算节点经官方代理访问Hugging Face得到CONNECT 503，作业因此失败。
 固定资产改为本机下载、核验并上传，数据准备与模型计算仍在计算节点执行。
+
+离线数据源通过`python -m prism.source_assets --config configs/experiment.yaml --cache local/hf-cache`
+在本机下载固定revision的原始train_gen/test_gen parquet和IFEval JSONL，
+生成相对路径及SHA256清单`sources.manifest.json`。将hub与清单上传到集群HF cache后：
+
+```bash
+PRISM_ALLOW_SUBMIT=1 bash scripts/yancheng/submit.sh prepare-data \
+  --config /online1/.../frozen.yaml --source-manifest /online1/.../hf-cache/sources.manifest.json
+```
+
+计算节点核对revision/分区/文件哈希，只读取prompt与ID列，并用同一个
+prepare_data算法和SFT tokenizer生成固定划分。原始来源哈希写入最终数据manifest，
+不依赖计算节点公网，也不在本机运行正式数据筛选。

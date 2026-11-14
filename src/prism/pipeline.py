@@ -202,8 +202,11 @@ def stage_assets(c):
         stage_ifeval_resources(c)
 
 
-def prepare_data(c):
+def prepare_data(c, source_manifest=None):
     from .data import prepare_data as prepare
+    if source_manifest:
+        from .source_assets import offline_loader
+        return prepare(c, load_dataset_fn=offline_loader(c, source_manifest), raw_source_manifest=source_manifest)
     return prepare(c)
 
 

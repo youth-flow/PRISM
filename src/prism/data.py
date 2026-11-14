@@ -169,7 +169,7 @@ def _write_transaction(paths, outputs, manifest):
             path.unlink(missing_ok=True)
 
 
-def prepare_data(c, load_dataset_fn=None, tokenizer_factory=None):
+def prepare_data(c, load_dataset_fn=None, tokenizer_factory=None, raw_source_manifest=None):
     """Explicitly materialize pinned, exact-count prompt splits and full IFEval.
 
     Factories have the signatures of datasets.load_dataset and
@@ -234,6 +234,10 @@ def prepare_data(c, load_dataset_fn=None, tokenizer_factory=None):
                 "counts": {key: len(value) for key, value in outputs.items()},
                 "excluded": {"train": train_stats, "test": test_stats},
                 "selected_ids": {key: [row["id"] for row in value] for key, value in outputs.items()}}
+    if raw_source_manifest:
+        raw_source_manifest = Path(raw_source_manifest)
+        manifest["raw_sources"] = {"manifest_sha256": _sha256(raw_source_manifest),
+                                   "sources": json.loads(raw_source_manifest.read_text(encoding="utf-8"))["sources"]}
     _write_transaction(paths, outputs, manifest)
     return {"manifest_path": str(paths["manifest"]), "counts": manifest["counts"],
             "excluded": manifest["excluded"]}
