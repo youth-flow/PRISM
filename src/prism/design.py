@@ -3,7 +3,7 @@ from itertools import combinations
 
 import numpy as np
 from scipy.linalg import cho_factor, cho_solve, solve_triangular
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize, minimize_scalar
 from scipy.special import softmax
 
 
@@ -41,6 +41,85 @@ def objective_gradient(v, K, q, ridge):
     B = inv @ K @ inv
     sensitivity = np.einsum("ij,jk,ik->i", v, B, v, optimize=True)
     return float(np.sum(K * inv.T)), -sensitivity
+
+
+def _normalized_objective(v, K, weights, ridge):
+    """Original objective in nonnegative coordinates q=w/sum(w), without floors."""
+    total = float(np.sum(weights))
+    if total <= 0 or not np.isfinite(total) or np.any(weights < 0):
+        raise ValueError("Nonnegative design weights need finite positive total mass")
+    q = weights / total
+    value, gradient = objective_gradient(v, K, q, ridge)
+    return value, (gradient - float(q @ gradient)) / total, q, gradient
+
+
+def joint_design(v, K, initial, ridge, max_iter=500, relative_gap=1e-4):
+    """Joint L-BFGS-B search; only the original global FW gap certifies success.
+
+    Every original simplex point is represented, including zero coordinates.
+    The coordinate objective is not asserted convex; its stopping flag is never
+    a certificate. Convexity of F(q) supplies the independently recomputed gap.
+    """
+    v, K, initial = (np.asarray(a, dtype=np.float64) for a in (v, K, initial))
+    if (v.ndim != 2 or not len(v) or initial.shape != (len(v),)
+            or not np.isfinite(v).all() or not np.isfinite(initial).all()
+            or np.any(initial < 0) or not np.isclose(initial.sum(), 1)
+            or not np.isfinite(ridge) or ridge <= 0
+            or type(max_iter) is not int or max_iter < 1
+            or not np.isfinite(relative_gap) or relative_gap <= 0):
+        raise ValueError("Invalid joint Design inputs")
+    if (K.shape != (v.shape[1], v.shape[1]) or not np.isfinite(K).all()
+            or not np.allclose(K, K.T)
+            or np.linalg.eigvalsh(K).min() < -1e-8 * max(1, np.linalg.norm(K, 2))):
+        raise ValueError("K must be positive semidefinite")
+    # Positive constant scaling conditions the numerical coordinates; neither
+    # the minimizers nor the unscaled objective/gap used for acceptance change.
+    scale = len(initial)
+    state = {"evaluations": 0, "iterations": 0, "history": []}
+
+    class Certified(Exception):
+        pass
+
+    def objective(weights):
+        if weights.sum() <= 0:
+            # The origin has no associated q. Reject it in line search instead
+            # of introducing a probability floor or accepting a fake solution.
+            return float("inf"), np.zeros_like(weights)
+        value, gradient, q, original_gradient = _normalized_objective(v, K, weights, ridge)
+        gap = max(0., float(q @ original_gradient - original_gradient.min()))
+        state.update(q=q.copy(), value=value, gap=gap)
+        state["evaluations"] += 1
+        if gap <= relative_gap * max(value, 1e-15):
+            raise Certified()
+        return scale * value, scale * gradient
+
+    def callback(weights):
+        state["iterations"] += 1
+        state["history"].append({"iteration": state["iterations"], "objective": state["value"], "gap": state["gap"]})
+        if state["iterations"] % 10 == 0:
+            print(f"design-joint iteration={state['iterations']} evaluations={state['evaluations']} objective={state['value']:.10g} relative_gap={state['gap']/max(state['value'], 1e-15):.7g}", flush=True)
+
+    result = None
+    try:
+        result = minimize(objective, scale * initial, jac=True, method="L-BFGS-B",
+                          bounds=[(0., None)] * scale, callback=callback,
+                          options={"maxiter": max_iter, "maxfun": max_iter * 20,
+                                   "maxls": 50, "ftol": np.finfo(float).eps, "gtol": 1e-12})
+        weights = np.maximum(result.x, 0.)
+        q = weights / weights.sum()
+    except Certified:
+        q = state["q"]
+    # Fresh evaluation in original q coordinates; no optimizer success flag or
+    # normalized-coordinate gradient norm can bypass this acceptance condition.
+    value, gradient = objective_gradient(v, K, q, ridge)
+    gap = max(0., float(q @ gradient - gradient.min()))
+    return q, {"objective": value, "fw_gap": gap,
+               "converged": bool(gap <= relative_gap * max(value, 1e-15)),
+               "solver": "normalized_nonnegative_lbfgsb", "max_iter": max_iter,
+               "relative_gap_tolerance": relative_gap, "coordinate_scale": scale,
+               "iterations": state["iterations"], "evaluations": state["evaluations"],
+               "optimizer_message": "original_global_gap_certificate" if result is None else str(result.message),
+               "history": state["history"]}
 
 
 def _line_objective(A, K, ridge, *, vertex=None, mixture=None):

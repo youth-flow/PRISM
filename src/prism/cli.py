@@ -20,6 +20,9 @@ def main():
     parser.add_argument("--source-manifest", help="Pinned raw-source manifest for offline prepare-data")
     parser.add_argument("--shard-index", type=int)
     parser.add_argument("--shards", type=int, default=1)
+    parser.add_argument("--design-solver", choices=["away-fw", "joint-lbfgs"], default="away-fw")
+    parser.add_argument("--design-geometry", help="Hash-verified archived design.npz from this run")
+    parser.add_argument("--design-warm-start", action="store_true", help="Start joint solve from the archived distribution")
     a = parser.parse_args()
     c, missing = load_config(a.config, ready=a.ready or a.stage not in ("validate", "plan", "resource", "api-env-names", "stage-assets", "prepare-data"))
     if a.stage == "validate":
@@ -68,7 +71,9 @@ def main():
         print(pipeline.merge_rollout(c, a.shards))
     elif a.stage == "prepare-data":
         print(pipeline.prepare_data(c, source_manifest=a.source_manifest))
-    elif a.stage in ("stage-assets", "model-smoke", "rollout", "design"):
+    elif a.stage == "design":
+        print(pipeline.design(c, solver=a.design_solver, geometry=a.design_geometry, warm_start=a.design_warm_start))
+    elif a.stage in ("stage-assets", "model-smoke", "rollout"):
         print(getattr(pipeline, a.stage.replace("-", "_"))(c))
     else:
         if a.method is None or a.budget is None or a.seed is None:

@@ -5,7 +5,7 @@ import time
 
 import numpy as np
 
-from .design import edges, empirical, frank_wolfe, proxy
+from .design import edges, empirical, frank_wolfe, joint_design, proxy
 from .io import cell, digest, dump, fresh, prompt_rows, receipt, root, rows, verify_receipt, write_rows
 from .reward import fit_bt
 
@@ -98,25 +98,62 @@ def merge_rollout(c, shards):
     return {"prompts": len(data), "responses": len(records), "shards": shards}
 
 
-def design(c):
+def _cached_design_geometry(p, source):
+    """Reuse exact geometry from a hash-verified archived attempt of this run.
+
+    An archive retains the original receipt. Remap only the two Design outputs;
+    the pool receipt must still be identical at its original canonical path.
+    """
+    source = Path(source).resolve()
+    if source.name != "design.npz":
+        raise ValueError("Geometry source must be an archived design.npz")
+    marker = source.with_name("design.receipt.json")
+    metadata = json.loads(marker.read_text(encoding="utf-8"))
+    original_paths = [p / name for name in ("design.npz", "design.report.json", "pool.receipt.json")]
+    if set(metadata["input_sha256"]) != {str(path) for path in original_paths}:
+        raise ValueError("Geometry receipt does not belong to this run")
+    dependencies = []
+    for original in original_paths:
+        actual = original if original.name == "pool.receipt.json" else source.with_name(original.name)
+        if digest(actual) != metadata["input_sha256"][str(original)]:
+            raise ValueError(f"Archived Design geometry changed: {actual}")
+        dependencies.append(actual)
+    with np.load(source, allow_pickle=False) as a:
+        geometry = {key: a[key] for key in ("index", "v", "b", "proxy_probabilities", "K", "empirical")}
+        warm = {key: a[key] for key in ("prism", "a_optimal") if key in a}
+    return geometry, warm, dependencies + [marker]
+
+
+def design(c, *, solver="away-fw", geometry=None, warm_start=False):
     p = root(c)
     verify_receipt(p / "pool.receipt.json")
-    fresh(p / "design.npz")
-    with np.load(p / "pool.npz", allow_pickle=False) as a:
-        phi, logp = a["phi"].astype(np.float64), a["logp"]
-    b, probabilities, K = proxy(phi, logp, c["design"]["surrogate_ridge"])
-    index, v = edges(phi)
-    q0 = empirical(index)
+    fresh(p / "design.npz", p / "design.report.json", p / "design.receipt.json")
+    if solver not in ("away-fw", "joint-lbfgs") or (warm_start and (geometry is None or solver != "joint-lbfgs")):
+        raise ValueError("Invalid Design solver or warm start without cached joint geometry")
+    dependencies, starts = [], {}
+    if geometry is None:
+        with np.load(p / "pool.npz", allow_pickle=False) as a:
+            phi, logp = a["phi"].astype(np.float64), a["logp"]
+        b, probabilities, K = proxy(phi, logp, c["design"]["surrogate_ridge"])
+        index, v = edges(phi)
+        q0 = empirical(index)
+    else:
+        cached, starts, dependencies = _cached_design_geometry(p, geometry)
+        index, v, b, probabilities, K, q0 = (cached[key] for key in ("index", "v", "b", "proxy_probabilities", "K", "empirical"))
     distributions, reports = {"empirical": q0}, {}
     for method, target in (("a_optimal", np.eye(v.shape[1])), ("prism", K)):
         if method not in c["methods"]:
             continue
-        print(f"design {method}: {len(v)} edges, dimension {v.shape[1]}", flush=True)
-        q, report = frank_wolfe(v, target, q0, c["design"]["matrix_ridge"], c["design"]["fw_max_iter"], c["design"]["fw_relative_gap"])
+        initial = starts[method] if warm_start else q0
+        solve = joint_design if solver == "joint-lbfgs" else frank_wolfe
+        print(f"design {method}: {len(v)} edges, dimension {v.shape[1]}, solver={solver}, warm_start={warm_start}", flush=True)
+        q, report = solve(v, target, initial, c["design"]["matrix_ridge"], c["design"]["fw_max_iter"], c["design"]["fw_relative_gap"])
+        report["warm_start"] = warm_start
         distributions[method], reports[method] = q, report
     np.savez_compressed(p / "design.npz", index=index, v=v, b=b, proxy_probabilities=probabilities, K=K, **distributions)
     dump(p / "design.report.json", reports)
-    receipt(p / "design.receipt.json", [p / "design.npz", p / "design.report.json", p / "pool.receipt.json"])
+    receipt(p / "design.receipt.json", [p / "design.npz", p / "design.report.json", p / "pool.receipt.json"] + dependencies,
+            solver=solver, geometry_reused=geometry is not None, warm_start=warm_start)
     if not all(r["converged"] for r in reports.values()):
         print("WARNING: FW gap tolerance not reached. Inspect design.report.json before collecting labels.", flush=True)
 
