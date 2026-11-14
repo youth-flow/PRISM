@@ -78,6 +78,13 @@ def test_opportunistic_shard_array_keeps_one_gpu_per_task(platform):
     assert "--array=0-7%8" in result.stdout and "--gres=gpu:1" in result.stdout
     balanced = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "32", overrides={"PRISM_ARRAY": "0-31%8"})
     assert balanced.returncode == 0 and "--array=0-31%8" in balanced.stdout
+    remainder = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "32", overrides={"PRISM_ARRAY": "1-31%8", "PRISM_GPU_PARTITION": "q_a100,q_4090"})
+    assert remainder.returncode == 0 and "--array=1-31%8" in remainder.stdout
+    assert "--partition=q_a100\\,q_4090" in remainder.stdout
+    held = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "32", overrides={"PRISM_ARRAY": "1-31%8", "PRISM_HOLD": "1"})
+    assert held.returncode == 0 and "--hold" in held.stdout
+    invalid = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "32", overrides={"PRISM_ARRAY": "1-32%8"})
+    assert invalid.returncode != 0
     mismatch = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "4", overrides={"PRISM_ARRAY": "0-7%8"})
     assert mismatch.returncode != 0
     training = run("--dry-run", "cluster-label", "--config", shell_path(cfg))
@@ -159,3 +166,12 @@ def test_singularity_prefix_forwards_proxy_and_key_without_disclosing_values(pla
     result = subprocess.run([bash, "-c", script], env={**env, "PRISM_CONTAINER_RUNTIME": "singularity", "TEST_JUDGE_KEY": "fixture-only-key", "https_proxy": "http://proxy.invalid:3128"}, capture_output=True, text=True)
     assert result.returncode == 0 and result.stdout == "passed"
     assert "fixture-only-key" not in result.stdout + result.stderr
+
+
+def test_gpu_partition_list_accepts_only_complete_names(platform):
+    _, _, repo, env = platform
+    bash = str(Path(shutil.which("git")).parents[1]/"bin/bash.exe") if os.name == "nt" else shutil.which("bash")
+    source = shlex.quote(shell_path(repo/"scripts/yancheng/common.sh"))
+    for selected, expected in (("q_a100", 0), ("q_4090", 0), ("q_409", 2), ("q_other", 2)):
+        result = subprocess.run([bash, "-c", f"source {source}\nprism_check_gpu_partition"], env={**env, "PRISM_GPU_PARTITION": "q_a100,q_4090", "SLURM_JOB_PARTITION": selected}, capture_output=True, text=True)
+        assert result.returncode == expected, result.stderr

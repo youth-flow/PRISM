@@ -17,6 +17,14 @@ prism_runtime_env_prefix() {
   esac
 }
 
+prism_check_gpu_partition() {
+  # sbatch may choose any partition in an explicitly verified comma-separated list.
+  case ",${PRISM_GPU_PARTITION:?}," in
+    *",${SLURM_JOB_PARTITION:?},"*) ;;
+    *) prism_die "Unexpected GPU partition" ;;
+  esac
+}
+
 prism_forward_api_envs() {
   # Names come from the validated config. Values remain in the process
   # environment, never Apptainer command-line flags or output.

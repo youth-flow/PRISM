@@ -36,7 +36,7 @@ opts=(--cleanenv --no-home
 opts+=(--env "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-1}")
 opts+=(--env "OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}" --env "MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}")
 if [[ "$gpu" == 1 ]]; then
-  [[ "$SLURM_JOB_PARTITION" == "$PRISM_GPU_PARTITION" ]] || prism_die "Unexpected GPU partition"
+  prism_check_gpu_partition
   opts+=(--nv)
   for var in CUDA_VISIBLE_DEVICES NVIDIA_VISIBLE_DEVICES GPU_DEVICE_ORDINAL; do
     if [[ -v "$var" ]]; then opts+=(--env "$var=${!var}"); fi
@@ -70,6 +70,10 @@ if [[ "$stage" == label || "$stage" == evaluate-judge ]]; then
   fi
 fi
 echo "stage=$stage commit=$PRISM_COMMIT image=$PRISM_IMAGE_SHA256 runtime=$PRISM_CONTAINER_RUNTIME job=$SLURM_JOB_ID"
+if [[ "$gpu" == 1 && "$stage" != smoke && "$stage" != model-smoke ]]; then
+  echo "gpu_partition=$SLURM_JOB_PARTITION expected_model=${PRISM_GPU_MODEL:-A100}"
+  "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
+fi
 if [[ "$stage" == smoke ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
   "${runner[@]}" python -m pytest -q /opt/prism/tests -p no:cacheprovider --basetemp "$jobroot/pytest"

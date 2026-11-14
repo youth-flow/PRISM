@@ -45,15 +45,18 @@ else
 fi
 if [[ -n "${PRISM_QOS:-}" ]]; then args+=(--qos="$PRISM_QOS"); fi
 if [[ -n "${PRISM_EXCLUDE:-}" ]]; then args+=(--exclude="$PRISM_EXCLUDE"); fi
+if [[ "${PRISM_HOLD:-0}" == 1 ]]; then args+=(--hold); fi
 if [[ -n "${PRISM_ARRAY:-}" ]]; then
-  [[ "$stage" == rollout-shard && "$PRISM_ARRAY" =~ ^0-([0-9]{1,2})%([1-8])$ ]] || prism_die "Rollout array needs 0-LAST%CONCURRENCY with concurrency 1..8"
-  shard_count=$((10#${BASH_REMATCH[1]}+1))
-  [[ "$shard_count" -ge 2 && "$shard_count" -le 32 ]] || prism_die "Rollout array must contain 2..32 one-GPU shards"
+  [[ "$stage" == rollout-shard && "$PRISM_ARRAY" =~ ^([0-9]{1,2})-([0-9]{1,2})%([1-8])$ ]] || prism_die "Rollout array needs FIRST-LAST%CONCURRENCY with concurrency 1..8"
+  first=$((10#${BASH_REMATCH[1]})) last=$((10#${BASH_REMATCH[2]}))
   declared_shards=""
   for ((i=0; i<${#cli[@]}; i++)); do
     if [[ "${cli[$i]}" == --shards && $((i+1)) -lt ${#cli[@]} ]]; then declared_shards="${cli[$((i+1))]}"; fi
   done
-  [[ "$declared_shards" == "$shard_count" ]] || prism_die "Array size must match --shards"
+  [[ "$declared_shards" =~ ^[0-9]{1,2}$ ]] || prism_die "Supply a numeric --shards count"
+  shard_count=$((10#$declared_shards))
+  [[ "$shard_count" -ge 2 && "$shard_count" -le 32 ]] || prism_die "Rollout must contain 2..32 global shards"
+  [[ "$first" -le "$last" && "$last" -lt "$shard_count" ]] || prism_die "Array indices must be within global --shards"
   args+=(--array="$PRISM_ARRAY")
 fi
 if [[ -n "${PRISM_DEPENDENCY:-}" ]]; then
