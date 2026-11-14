@@ -54,3 +54,23 @@
 - 集群SIF大小3540611072字节，声明与实际SHA256均为`c1b4e80d731cbb3124825ce81c3dcd5226865478cf051db165ec27a0856d6896`；尚未在CPU节点执行，也未加载真实1B模型。
 - 启动审计确认正式prompt、IFEval源码/NLTK资源、数据manifest和HF cache仍未准备；结构校验通过但`validate --ready`未通过。正式顺序因此是CPU smoke→资产/数据→ready校验→GPU model smoke，而不是直接提交rollout/PPO。
 - 平台wrapper新增`cpu-smoke`、cleanenv代理转发和按阶段资源默认值，避免以统一8核/64GB/8小时错误套用所有阶段；提交总开关保持fail closed。
+
+## 实验启动、离线资产与本机 Judge — 2026-11-14
+
+- 用户已明确授权执行冻结的小规模实验，并指定DeepSeek训练Judge、Luna评价Judge均在本机调用。新增哈希绑定的导出/本地调用/集群导入流程；复用原始阶段的seed、顺序、失败重试和计费记录。模拟传输测试覆盖AB/BA、独立重复draw、并发、断点续跑、部分结果导入和内容篡改拒绝。真实密钥不上传到集群，集群config保持关闭直接API调用。
+- CPU短作业1976605证明调度与容器启动正常，但官方代理访问Hugging Face返回CONNECT 503。资产改为本机下载、核验并上传；正式数据准备及模型运算仍在计算节点执行。
+- 固定OLMo快照只有`pytorch_model.bin`；原stage-assets无条件排除bin导致漏权重，现优先safetensors、无该格式时保留bin。权重2969891414字节，本机SHA256为`338aeb8b3049cc9b19ba1f3e6df4b5280f3e002b5ae9e38328a353d8f072d534`，与仓库LFS哈希一致。
+- 离线CPU验收作业1976644在bn037申请4 CPU/6G，55秒完成；**104 passed**，含真实微型OLMo/TRL PPO与完整31阶段CLI、官方IFEval及本地Judge交换测试。峰值RSS619224 KiB。网络明确标记`skipped_offline`。首次全套检查发现NLTK即使资源已暂存仍查询在线索引，修复为校验manifest后离线复用；不改研究算法或超参数。
+- 数据准备作业1976650在bn037以4 CPU/6G运行62秒完成。按固定来源、SFT tokenizer和NumPy1.26.4/seed20261109生成3000 Design、2000 policy、500 evaluation、541完整IFEval。训练原始61135条，去重30、超长988，合格60117；测试原始1000条，排除训练重叠2、超长18，合格980。原始来源清单SHA256为`c96eecd982267feda9abf975bf7275d5b643f3cc81ad3982666bea80c07dcab4`。
+- `validate --ready`作业1976655以1 CPU运行12秒完成，报告`prepared_inputs_present=true`、`full_input_validation=true`、无剩余缺项；GPU验证仍为`not_performed`。上述作业源码commit为`0eccc375cf202c58bbe207cf4879e2d30853c3d5`。
+
+| 固定数据文件 | SHA256 |
+|---|---|
+| design.jsonl | `983d6c64c3a9d48226b0ef0f96b4b7c6e6811fc85fd00c7b2a5f081244398217` |
+| policy.jsonl | `d4a19d226e6978ff356b7442184e0c1929dd3dda51b323dba3e265c1a59e5fc5` |
+| evaluation.jsonl | `e8cb91086dcf83c5c980204bf6494db8140bc6b8e54e7b2ac905343eea12a13f` |
+| ifeval.jsonl | `5e180e38c95f64e28bd0796e0469509b884aff83973990b2683b12be062dbf1c` |
+| data.manifest.json | `8216275620b7c64b1520f68eedbb3aa95905a7a47a65b12173ee94e71f046801` |
+
+本节点未完成真实1B/A100验收、正式rollout/PPO或批量Judge调用。模型大包上传、
+集群端权重哈希及真实GPU model-smoke为接续步骤，不能把CPU测试替代为真实模型效果证据。
