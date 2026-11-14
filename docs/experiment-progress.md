@@ -10,7 +10,7 @@ Empirical/PRISM、seeds 11/23、每单元1024有效标签、4096 PPO episodes。
 | 阶段 | 当前状态 | 完成验收条件 |
 | --- | --- | --- |
 | 1 候选生成与共享SFT基线 | 已完成，独立CPU验收1978162通过 | 完整pool合并哈希/覆盖/顺序/有限数检查；500条评价与541条IFEval共享基线及receipt |
-| 2 Design | 1978113已在bn030正式计算，16 CPU | 固定目标、ridge和500步上限，FW gap达既定阈值；未收敛不得花标签 |
+| 2 Design | 1978113未达gap；已定位稠密初始表示停滞，修复待集群验收重算 | 固定目标、ridge和500步上限，FW gap达既定阈值；未收敛不得花标签 |
 | 3 DeepSeek标注与Reward | 四单元已按依赖入队 | 4096个有效标签；完整失败/重试/usage记录；四份BT拟合诊断和receipt |
 | 4 PPO | 四单元单卡4090，等待Reward | 各4096 episodes/64 updates；数值、adapter与训练receipt通过 |
 | 5 评价生成、KL、IFEval | 四单元等待PPO及共享基线 | 固定500条匹配评价、541条官方IFEval；相对冻结SFT的序列KL |
@@ -68,3 +68,11 @@ instruction strict 57.6739%、instruction loose 60.4317%。通用评价回答平
 receipt为`3048611d6169326d5fb3c264d5d59d4477f2502bc82e6da59ba86f90c538f761`。
 Design1978113在bn030正常计算，检查时约14.4/16核平均利用；
 等待固定FW gap通过后接续4096个训练标签、四份Reward与PPO。
+
+Design1978113用时26分28秒完成500次，目标1.137937、gap1.060549，
+未通过原1e-4相对阈值。四个sample按保护机制失败在写query之前，
+训练Judge、Reward、PPO尚未运行，API调用预算未消耗。
+CPU诊断1978256用时11秒确认：away步骤正逐个去除17746条同质量初始边，
+每步改进仅约2.31e-5。修正初始分布的冗余原子表示，保留原目标/全部可行边、
+全维特征、ridge、500步上限和gap。解析/SLSQP及线搜索对照10项通过；
+完整集群测试与真实重算待完成。详见`ALGORITHM_REVIEW.md`第5节。

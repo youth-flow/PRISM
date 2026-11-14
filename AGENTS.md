@@ -21,3 +21,4 @@
 - 生成资源档已用真实分片1977931验收：2 CPU/16G，94 prompts/376 responses、全部receipt哈希和2048维有限特征/logp通过；约109 token/s、主存峰值约1.18 GiB。仅对尚未启动的生成/评价生成任务推广，保持运行任务不变，PPO仍8 CPU/64G。
 - 候选32片及合并1977814已COMPLETED（3000 prompts/12000 responses）。原Design1977815在bn002的starter-suid发生Lustre cl_sync_io_wait，未启动Python、未写Design产物；保留日志后停止。替代Design1978113在bn030进入正式计算，源07142cc与原算法逐文件无差异，仍16 CPU/24G；四个sample依赖已改为1978113。待运行CPU任务及私有默认配置排除bn002。
 - 第一阶段已完成：SFT基线1977812用时1:39:43完成500+541条；独立CPU验收1978162用时19秒，通过全部哈希、token解码、EOS、逐元素合并及官方评分分母检查。phase1.audit.json/receipt保存在正式run，SFT IFEval prompt strict约46.95%。当前进入Design，其他阶段仍待实际完成。
+- Design1978113运行500步后gap不达标，四个sample失败在生成query之前，无训练API调用。诊断1978256确认away每步只删一个2.18e-5初始质量。正在修复稠密初始分布的内部冗余原子表示，原目标/可行域、2048维、ridge、500步和1e-4阈值保持不变；必须经完整集群检查及真实gap验收后再放行。原失败Design产物须带哈希归档，禁止覆盖后冒称原次成功。

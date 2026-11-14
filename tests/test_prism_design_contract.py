@@ -5,7 +5,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from prism import pipeline
-from prism.design import frank_wolfe, objective_gradient, proxy
+from prism.design import _line_objective, frank_wolfe, objective_gradient, proxy
 from prism.io import receipt, root, write_rows
 from test_contracts import fixture_config
 
@@ -84,3 +84,32 @@ def test_unconverged_design_cannot_spend_labels(tmp_path):
     with pytest.raises(RuntimeError, match="FW did not converge"):
         pipeline.sample(c, "prism", 1000, 7)
     assert not (p/"prism/n1000/seed7/queries.jsonl").exists()
+
+
+def test_dense_initializer_drops_redundant_mass_with_frozen_iteration_budget():
+    # Thousands of initially positive zero edges must not consume one away step
+    # each. Compare with the analytic two-informative-edge optimum.
+    v = np.vstack((100 * np.eye(2), np.zeros((18000, 2))))
+    K, ridge = np.diag([1., 4.]), .01
+    q, report = frank_wolfe(v, K, np.full(len(v), 1 / len(v)), ridge, 500, 1e-4)
+    qstar = (1 + 2 * ridge / 10000) / 3 - ridge / 10000
+    assert report["converged"] and len(report["history"]) <= 500
+    np.testing.assert_allclose(q[:2], [qstar, 1-qstar], atol=1e-6)
+    assert q[2:].sum() < 1e-10
+    assert any(r.get("direction") == "away_initial" for r in report["history"])
+    value, gradient = objective_gradient(v, K, q, ridge)
+    assert q @ gradient - gradient.min() <= 1e-4 * value
+
+
+def test_dense_atom_line_matches_direct_inverse_in_both_directions():
+    rng = np.random.default_rng(907)
+    v = rng.normal(size=(20, 5))
+    initial, q = rng.dirichlet(np.ones(20)), rng.dirichlet(np.ones(20))
+    factor = rng.normal(size=(5, 3))
+    K, ridge = factor @ factor.T, .3
+    mixture, current = v.T @ (initial[:, None]*v), v.T @ (q[:, None]*v)
+    A = ridge*np.eye(5) + current
+    line = _line_objective(A, K, ridge, mixture=mixture)
+    for gamma in (-.1, 0, .25, .9):
+        direct = float(np.trace(np.linalg.solve(A + gamma*(mixture-current), K)))
+        np.testing.assert_allclose(line(gamma), direct, rtol=1e-12, atol=1e-12)
