@@ -10,7 +10,7 @@ from .judges import judge_settings
 from .local_judge import export_packet, import_results, run_packet, validate_packet
 
 
-def run_training(c, method, budget, seed, *, workers=4, execute=False, transport=None):
+def run_training(c, method, budget, seed, *, workers=4, execute=False, transport=None, network_retries=0):
     if not execute:
         raise RuntimeError("Cluster DeepSeek calls require explicit execution")
     if judge_settings(c, "training")["backend"] != "deepseek":
@@ -18,13 +18,16 @@ def run_training(c, method, budget, seed, *, workers=4, execute=False, transport
     out = cell(c, method, budget, seed)
     marker = out / "labels.receipt.json"
     if marker.exists():
-        return verify_receipt(marker)
+        metadata = verify_receipt(marker)
+        if metadata.get("decoder_revision") != "native_candidate_alias_v1":
+            raise RuntimeError("Archive the older decoded label snapshot before replaying the current decoder")
+        return metadata
     packet, results = out / "training.packet.json", out / "training.api.results.jsonl"
     if not packet.exists():
         export_packet(c, "label", method, budget, seed, packet)
     validate_packet(c, packet)  # Check immutable inputs before spending.
     try:
-        run_packet(packet, results, execute=True, workers=workers, transport=transport)
+        run_packet(packet, results, execute=True, workers=workers, transport=transport, network_retries=network_retries)
     except BaseException:
         # Preserve partial calls in the canonical stage ledger as well. The
         # source results remain append-only even when the API is interrupted.
@@ -45,6 +48,7 @@ def main():
     parser.add_argument("--budget", type=int, required=True)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--network-retries", type=int, default=0)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     if not os.environ.get("SLURM_JOB_ID"):
@@ -56,7 +60,7 @@ def main():
     c, _ = load_config(args.config, ready=True)
     settings = judge_settings(c, "training")
     os.environ[settings["api_key_env"]] = path.read_text(encoding="utf-8").strip()
-    result = run_training(c, args.method, args.budget, args.seed, workers=args.workers, execute=args.execute)
+    result = run_training(c, args.method, args.budget, args.seed, workers=args.workers, execute=args.execute, network_retries=args.network_retries)
     print(json.dumps({k: v for k, v in result.items() if k != "input_sha256"}, ensure_ascii=False))
 
 

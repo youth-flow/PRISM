@@ -87,7 +87,8 @@ elif [[ "$stage" == rollout-shard ]]; then
 elif [[ "$stage" == cluster-label ]]; then
   key_file="${PRISM_TRAINING_KEY_FILE:-$PRISM_STORAGE/prism/secrets/deepseek-api.key}"
   prism_path_under "$PRISM_STORAGE" "$key_file"
-  "${runner[@]}" python -m prism.cluster_judge "$@" --key-file "$key_file" --workers "${PRISM_JUDGE_WORKERS:-4}" --execute
+  echo "training_judge_workers=${PRISM_JUDGE_WORKERS:-4} network_retries=${PRISM_JUDGE_NETWORK_RETRIES:-0}"
+  "${runner[@]}" python -m prism.cluster_judge "$@" --key-file "$key_file" --workers "${PRISM_JUDGE_WORKERS:-4}" --network-retries "${PRISM_JUDGE_NETWORK_RETRIES:-0}" --execute
 elif [[ "$stage" == judge-export || "$stage" == judge-import ]]; then
   "${runner[@]}" python -m prism.local_judge "${stage#judge-}" "$@"
 else

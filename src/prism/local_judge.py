@@ -9,12 +9,21 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+import shutil
 from threading import Event, Lock
 
 import numpy as np
 
-from .io import cell, digest, dump, load_config, root, rows, verify_receipt
-from .judges import APIJudge, _parse, evaluation_call_seed, judge_protocol, judge_settings, training_call_seed
+from .io import cell, digest, dump, load_config, receipt, root, rows, verify_receipt
+from .judges import APIJudge, _parse, evaluation_call_seed, judge_protocol, judge_settings, normalize_preference_result, training_call_seed
+
+
+NETWORK_RETRY_LIMIT = 2
+
+
+def _network_failure(result):
+    error = result.get("error") or {}
+    return result.get("label") is None and error.get("retryable") is True and error.get("type") in ("network_error", "http_error")
 
 
 def _hash(value):
@@ -108,7 +117,7 @@ def _load_packet(path):
     return packet
 
 
-def _records(packet, results):
+def _records(packet, results, *, with_accounting=False):
     tasks = {t["id"]: t for t in packet["tasks"]}
     if len(tasks) != len(packet["tasks"]):
         raise ValueError("Duplicate Judge task ID")
@@ -118,12 +127,15 @@ def _records(packet, results):
             if row.get("packet_id") != packet["packet_id"]:
                 raise ValueError("Judge results belong to another packet")
             records.append(row)
-    indexed = {}
+    indexed, seen, retry_counts = {}, set(), {}
     for row in records:
         task, attempt, result = tasks.get(row["task_id"]), row["attempt"], row["result"]
         if task is None or type(attempt) is not int or not 0 <= attempt < len(task["calls"]):
             raise ValueError("Unknown Judge task/attempt")
         key, call = (task["id"], attempt), task["calls"][attempt]
+        retransmission = row.get("transport_retry", 0)
+        if type(retransmission) is not int or not 0 <= retransmission <= NETWORK_RETRY_LIMIT:
+            raise ValueError("Invalid transport retry index")
         legacy = "preference_ab_v1" if packet["role"] == "training" else "preference_ab_tie_v1"
         if result.get("judge_protocol", legacy) != packet.get("judge_protocol", legacy):
             raise ValueError("Judge results use a different prompt protocol")
@@ -135,8 +147,14 @@ def _records(packet, results):
                         or calls[0].get("function", {}).get("name") != "record_preference"
                         or calls[0].get("function", {}).get("arguments") != result.get("raw")))):
                 raise ValueError("Judge tool channel or endpoint does not match its packet")
-        if key in indexed or result.get("seed") != call["seed"] or result.get("flip") != call["flip"]:
+        if ((*key, retransmission) in seen or result.get("seed") != call["seed"] or result.get("flip") != call["flip"]):
             raise ValueError("Duplicate or misaligned Judge result")
+        if retransmission:
+            if (packet.get("judge_protocol") != "preference_tool_enum_v4" or attempt != len(task["calls"])-1
+                    or key not in indexed or retry_counts[key] != retransmission-1 or not _network_failure(indexed[key])):
+                raise ValueError("Transport retries require the same exhausted final request after a network failure")
+        elif key in indexed:
+            raise ValueError("Duplicate Judge logical attempt")
         label = result.get("label")
         if label is not None and (type(label) not in (int, float) or label not in (0, 0.5, 1) or label != _parse(result.get("raw", ""), packet["role"], call["flip"], protocol=packet.get("judge_protocol", legacy))):
             raise ValueError("Judge label does not match its raw answer/order")
@@ -146,15 +164,44 @@ def _records(packet, results):
         if any(r is None or r["label"] is not None for r in earlier):
             raise ValueError("Judge attempts are not a contiguous failure prefix")
         indexed[key] = result
-    return tasks, indexed
+        retry_counts[key] = retransmission
+        seen.add((*key, retransmission))
+    logical_count = len(indexed)
+    interpreted = {}
+    for task in tasks.values():
+        for attempt in range(len(task["calls"])):
+            key = (task["id"], attempt)
+            if key not in indexed:
+                break
+            result = normalize_preference_result(indexed[key])
+            if retry_counts[key]:
+                result = {**result, "transport_retry": retry_counts[key]}
+            interpreted[key] = result
+            if result["label"] is not None:
+                break  # Later historical retries are charged but never select a preferred label.
+    if not with_accounting:
+        return tasks, interpreted
+    normalized = [normalize_preference_result(row["result"]) for row in records]
+    accounting = {"actual_judge_calls": len(records),
+                  "invalid_calls": sum(r["label"] is None for r in normalized),
+                  "source_invalid_calls": sum(row["result"]["label"] is None for row in records),
+                  "canonical_judge_calls": len(interpreted),
+                  "collapsed_transport_calls": len(records)-logical_count,
+                  "superseded_semantic_calls": logical_count-len(interpreted),
+                  "max_transport_retry_used": max(retry_counts.values(), default=0)}
+    return tasks, interpreted, accounting
 
 
-def run_packet(packet_path, results, *, execute=False, transport=None, workers=1):
+def run_packet(packet_path, results, *, execute=False, transport=None, workers=1, network_retries=0):
     if not execute:
         raise RuntimeError("Local API execution requires --execute")
     if type(workers) is not int or not 1 <= workers <= 16:
         raise ValueError("Judge workers must be an integer in 1..16")
+    if type(network_retries) is not int or not 0 <= network_retries <= NETWORK_RETRY_LIMIT:
+        raise ValueError("Extra network retries must be in 0..2")
     packet = _load_packet(packet_path)
+    if network_retries and packet.get("judge_protocol") != "preference_tool_enum_v4":
+        raise ValueError("Extra transport retries are restricted to the checked cluster training protocol")
     tasks, indexed = _records(packet, results)
     c = {"execution": {"allow_paid_api_calls": True}, "judges": {packet["role"]: packet["settings"]}}
     judge = APIJudge(c, packet["role"], transport=transport)
@@ -189,8 +236,31 @@ def run_packet(packet_path, results, *, execute=False, transport=None, workers=1
                     completed += 1
                 break
         else:
-            stopped.set()
-            raise RuntimeError(f"Judge exhausted attempts for task {task['id']}; all attempts preserved")
+            # Three original semantic slots remain fixed. Only an unanswered
+            # retryable final request may be retransmitted, with identical seed,
+            # order and payload. Every dispatch has its own append-only record.
+            attempt = len(task["calls"])-1
+            result = previous[-1] if len(previous) == len(task["calls"]) else result
+            retry = result.get("transport_retry", 0)
+            while _network_failure(result) and retry < network_retries and not stopped.is_set():
+                retry += 1
+                call = task["calls"][attempt]
+                try:
+                    result = judge.call(task["messages"], task["left"], task["right"], call["seed"], call["flip"])
+                except BaseException:
+                    stopped.set()
+                    raise
+                record = {"packet_id": packet["packet_id"], "task_id": task["id"], "attempt": attempt,
+                          "transport_retry": retry, "result": result}
+                with lock:
+                    with results.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(record, ensure_ascii=False, allow_nan=False)+"\n")
+                        stream.flush()
+            if result["label"] is None:
+                stopped.set()
+                raise RuntimeError(f"Judge exhausted attempts for task {task['id']}; all attempts preserved")
+            with lock:
+                completed += 1
         with lock:
             if completed % max(1, len(tasks) // 20) == 0 or completed == len(tasks):
                 print(f"local-judge {completed}/{len(tasks)}", flush=True)
@@ -214,7 +284,7 @@ def validate_packet(c, packet_path):
 
 def import_results(c, packet_path, results):
     packet, tasks = validate_packet(c, packet_path)
-    _, indexed = _records(packet, results)
+    _, indexed, accounting = _records(packet, results, with_accounting=True)
     by_id = {t["id"]: t for t in tasks}
     recorded = {_call_hash(by_id[tid], by_id[tid]["calls"][a]): r for (tid, a), r in indexed.items()}
     class Replay:
@@ -227,7 +297,43 @@ def import_results(c, packet_path, results):
     args = (c, packet["method"], packet["budget"], packet["seed"])
     if packet["stage"] == "label":
         from .pipeline import label
-        return label(*args, judge_factory=factory)
+        out = cell(c, packet["method"], packet["budget"], packet["seed"])
+        marker, calls = out/"labels.receipt.json", out/"judge_calls.jsonl"
+        if marker.exists():
+            metadata = verify_receipt(marker)
+            if packet.get("judge_protocol") == "preference_tool_enum_v4" and metadata.get("decoder_revision") != "native_candidate_alias_v1":
+                raise RuntimeError("Preserve and archive the older decoded label snapshot before replaying the current decoder")
+            return metadata
+        if packet.get("judge_protocol") == "preference_tool_enum_v4" and calls.exists():
+            expected = []
+            for query in rows(out/"queries.jsonl"):
+                complete = False
+                for attempt in range(len(by_id[str(query["draw_id"])]["calls"])):
+                    result = indexed.get((str(query["draw_id"]), attempt))
+                    if result is None:
+                        break
+                    expected.append({**query, "attempt": attempt, **result})
+                    if result["label"] is not None:
+                        complete = True
+                        break
+                if not complete:
+                    break
+            previous = rows(calls)
+            if previous != expected[:len(previous)]:
+                archive = out/"label_derivations"/f"partial-{digest(calls)[:16]}-{digest(results)[:16]}"
+                archive.mkdir(parents=True, exist_ok=False)
+                calls.rename(archive/"judge_calls.jsonl")
+                shutil.copyfile(packet_path, archive/"packet.json")
+                shutil.copyfile(results, archive/"api.results.jsonl")
+                receipt(archive/"receipt.json", [archive/name for name in ("judge_calls.jsonl", "packet.json", "api.results.jsonl")],
+                        reason="native_candidate_alias_or_transport_replay", decoder_revision="native_candidate_alias_v1")
+        label(*args, judge_factory=factory)
+        if packet.get("judge_protocol") == "preference_tool_enum_v4":
+            metadata = json.loads(marker.read_text())
+            metadata.update(accounting, decoder_revision="native_candidate_alias_v1", raw_api_result_path=str(Path(results).resolve()))
+            metadata["input_sha256"].update({str(Path(packet_path).resolve()): digest(packet_path), str(Path(results).resolve()): digest(results)})
+            dump(marker, metadata)
+        return verify_receipt(marker)
     from .evaluation_v2 import evaluate_judge
     return evaluate_judge(*args, judge_factory=factory)
 

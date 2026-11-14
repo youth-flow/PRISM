@@ -88,7 +88,8 @@ def test_structured_preference_rejects_ambiguous_or_non_schema_answers(monkeypat
 
 
 @pytest.mark.parametrize("preferred,flip,label", [("response_A",False,1),("response_A",True,0),
-                                                 ("response_B",False,0),("response_B",True,1)])
+                                                 ("response_B",False,0),("response_B",True,1),
+                                                 ("A",False,1),("A",True,0),("B",False,0),("B",True,1)])
 def test_structured_preference_orientation(preferred, flip, label, monkeypatch):
     monkeypatch.setenv("PRISM_TEST_DEEPSEEK_KEY", "TEST_ONLY_NOT_A_REAL_KEY")
     text = json.dumps({"preferred_response": preferred})

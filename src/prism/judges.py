@@ -5,6 +5,7 @@ logging and spending accounting. Client seeds never claim API reproducibility.
 """
 import copy
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import time
@@ -110,15 +111,43 @@ def _parse(text, role, flip, *, protocol=None):
         if not isinstance(value, dict) or set(value) != {"preferred_response"}:
             return None
         preferred = value["preferred_response"]
-        if type(preferred) is not str or preferred not in ("response_A", "response_B"):
+        allowed = {"response_A": 1, "response_B": 0}
+        if protocol == "preference_tool_enum_v4":
+            allowed.update(A=1, B=0)  # Typed candidate-ID aliases, never task options C/D.
+        if type(preferred) is not str or preferred not in allowed:
             return None
-        label = int(preferred == "response_A")
+        label = allowed[preferred]
         return 1-label if flip else label
     allowed = {"A": 1, "B": 0}
     if role == "evaluation":
         allowed["TIE"] = 0.5
     label = allowed.get(text.strip())
     return 1 - label if label is not None and flip else label
+
+
+def normalize_preference_result(result):
+    """Derive a corrected candidate-ID interpretation without editing source rows."""
+    if (result.get("judge_protocol") != "preference_tool_enum_v4"
+            or result.get("label") is not None
+            or (result.get("error") or {}).get("type") != "invalid_judgment_format"
+            or result.get("finish_reason") != "tool_calls"):
+        return result
+    calls = result.get("tool_calls") or []
+    if (len(calls) != 1 or calls[0].get("type") != "function"
+            or calls[0].get("function", {}).get("name") != "record_preference"
+            or calls[0].get("function", {}).get("arguments") != result.get("raw")):
+        return result
+    label = _parse(result["raw"], "training", result["flip"], protocol="preference_tool_enum_v4")
+    if label is None:
+        return result
+    value = json.loads(result["raw"])["preferred_response"]
+    if value not in ("A", "B"):
+        return result
+    fingerprint = hashlib.sha256(json.dumps(result, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+    return {**result, "label": label, "error": None,
+            "output_normalization": {"rule": "native_candidate_alias_v1", "source_value": value,
+                                     "source_decoded_label": None, "source_error": result["error"],
+                                     "source_result_sha256": fingerprint}}
 
 
 class _NoRedirect(HTTPRedirectHandler):

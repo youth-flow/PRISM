@@ -245,6 +245,26 @@ def _csv(path, records):
             writer.writerows(records)
 
 
+def _training_accounting(c):
+    p = root(c)
+    paths = list((p/"label_streams").glob("*/seed*/judge_calls.jsonl")) if c["sampling"]["budget_coupling"] == "nested_prefix" else [cell(c, m, n, s)/"judge_calls.jsonl" for m in c["methods"] for n in c["budgets"] for s in c["seeds"]]
+    count, observations, charged_sources = 0, 0, set()
+    for path in paths:
+        if not path.exists():
+            continue
+        stream = rows(path)
+        observations += len({r["draw_id"] for r in stream if r.get("label") is not None})
+        marker = path.parent/"labels.receipt.json"
+        metadata = verify_receipt(marker) if marker.exists() else {}
+        source = metadata.get("raw_api_result_path")
+        source_path = Path(source) if source else path
+        if str(source_path) not in charged_sources:
+            count += len(rows(source_path)) if source else len(stream)
+            charged_sources.add(str(source_path))
+    return {"budget_coupling": c["sampling"]["budget_coupling"], "unique_training_calls": count,
+            "unique_valid_observations": observations}
+
+
 def aggregate(c):
     p, records, missing = root(c), [], []
     for method in c["methods"]:
@@ -275,13 +295,9 @@ def aggregate(c):
                     result[key+"_mean"] = float(np.mean(values)) if values else None
                     result[key+"_seed_std"] = float(np.std(values, ddof=1)) if len(values) > 1 else None
                 groups.append(result)
-    paths = list((p/"label_streams").glob("*/seed*/judge_calls.jsonl")) if c["sampling"]["budget_coupling"] == "nested_prefix" else [cell(c, m, n, s)/"judge_calls.jsonl" for m in c["methods"] for n in c["budgets"] for s in c["seeds"]]
-    streams = [rows(path) for path in paths if path.exists()]
     evaluation_logs = [rows(path) for method in c["methods"] for budget in c["budgets"] for seed in c["seeds"]
                        if (path := cell(c, method, budget, seed)/"evaluation.judge_calls.jsonl").exists()]
-    accounting = {"budget_coupling": c["sampling"]["budget_coupling"], "unique_training_calls": sum(map(len, streams)),
-                  "unique_valid_observations": sum(len({r["draw_id"] for r in stream if r.get("label") is not None}) for stream in streams),
-                  "evaluation_judge_calls": sum(map(len, evaluation_logs))}
+    accounting = {**_training_accounting(c), "evaluation_judge_calls": sum(map(len, evaluation_logs))}
     reference = _reference(c)
     sft = None
     if (reference/"reference.receipt.json").exists():
