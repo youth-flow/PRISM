@@ -69,6 +69,18 @@ def test_stage_specific_resource_profiles_and_cpu_smoke(platform):
     assert "--time=24:00:00" in rollout.stdout
 
 
+def test_opportunistic_shard_array_keeps_one_gpu_per_task(platform):
+    run, cfg, _, _ = platform
+    result = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "8", overrides={"PRISM_ARRAY": "0-7%8"})
+    assert result.returncode == 0, result.stderr
+    assert "--array=0-7%8" in result.stdout and "--gres=gpu:1" in result.stdout
+    mismatch = run("--dry-run", "rollout-shard", "--config", shell_path(cfg), "--shards", "4", overrides={"PRISM_ARRAY": "0-7%8"})
+    assert mismatch.returncode != 0
+    training = run("--dry-run", "cluster-label", "--config", shell_path(cfg))
+    assert training.returncode == 0 and "--gres" not in training.stdout
+    assert "--cpus-per-task=2" in training.stdout
+
+
 def test_no_actual_submission_or_storage_escape(platform):
     run, cfg, repo, _ = platform
     blocked = run("smoke", overrides={"PRISM_ALLOW_SUBMIT": "1"})

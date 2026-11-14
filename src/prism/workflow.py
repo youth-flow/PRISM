@@ -2,12 +2,12 @@
 
 
 def stage_resource(c, stage):
-    if stage in ("model-smoke", "rollout", "policy", "evaluate-reference", "evaluate-generate"):
+    if stage in ("model-smoke", "rollout", "rollout-shard", "policy", "evaluate-reference", "evaluate-generate"):
         return "gpu"
     if stage in ("label", "evaluate-judge"):
         from .judges import requires_gpu
         return "gpu" if requires_gpu(c, "training" if stage == "label" else "evaluation") else "cpu"
-    if stage in ("stage-assets", "prepare-data", "design", "sample", "reward", "aggregate", "validate", "plan"):
+    if stage in ("stage-assets", "prepare-data", "merge-rollout", "design", "sample", "cluster-label", "reward", "aggregate", "validate", "plan"):
         return "cpu"
     raise ValueError(f"Unknown experiment stage: {stage}")
 

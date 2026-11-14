@@ -165,3 +165,25 @@ prepare_data算法和SFT tokenizer生成固定划分。原始来源哈希写入�
 已确认网络阻断后，可显式使用`cpu-smoke --offline --tests`验收离线容器
 及CPU兼容测试；网络结果会明确记录为`skipped_offline`，不能当作联网成功。
 完整测试单次申请4 CPU/6G/15分钟，测试中不调用真实API，不加载真实模型权重。
+
+## 当前执行分工与空闲 GPU 并行（2026-11-14 更新）
+
+用户更新分工：DeepSeek训练Judge在集群CPU上调用，OpenAI/Luna评价Judge在本机调用。
+DeepSeek探针1976711在bn030使用`http://174.0.250.13:3128`代理，真实返回A，
+输入109/输出1 token、请求约1.962秒，作业正常结束。仅DeepSeek key存放于
+仓库外`prism/secrets/deepseek-api.key`（目录700、文件600）；OpenAI key不上传。
+
+集群使用`submit.sh cluster-label`（2 CPU/3G、默认4并发）在同一节点导出请求、
+调用DeepSeek、导入真实结果。配置及实验合同不变，付费许可仅在执行器进程中启用；
+失败/重试和断点记录沿用原阶段。该执行器拒绝OpenAI后端。
+
+共享rollout可拆为8个独立单GPU任务，使用`PRISM_ARRAY=0-7%8`与`--shards 8`。
+每任务仍为1张A100/8 CPU/64G；有几张空闲就可并行几片，不要求同时拿齐8卡。
+每条回答的seed由原全局prompt索引计算；合并按原prompt/candidate顺序，
+核验全部分片与完整覆盖，缺失或改动拒绝发布最终pool。
+合并任务用4 CPU/6G，随后Design用16 CPU/24G。
+独立PPO保持单GPU，通过四个训练单元并行利用多卡；不更改batch或episodes。
+
+旧排队作业会校验Git HEAD，因此新代码部署为独立源码版本目录；保留原model-smoke
+排队位置，替换尚未启动的旧rollout/Design依赖链。SFT基线生成也可在验收成功后
+提前与rollout并行，其输出仅作固定评价，不用于挑选训练参数。

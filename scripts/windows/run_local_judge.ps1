@@ -12,17 +12,19 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 if (-not $Python) { $Python = Join-Path $repoRoot 'tmp\assets-venv\Scripts\python.exe' }
 if (-not $KeyFile) { $KeyFile = Join-Path $repoRoot '计算资源\api.md' }
-$names = @('OPENAI_API_KEY','DEEPSEEK_API_KEY','HTTP_PROXY','HTTPS_PROXY','PYTHONPATH','PYTHONUTF8')
+$names = @('OPENAI_API_KEY','HTTP_PROXY','HTTPS_PROXY','PYTHONPATH','PYTHONUTF8')
 $before = @{}
 foreach ($name in $names) { $before[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
 try {
     if (-not $Execute) { throw 'Local paid API execution requires -Execute.' }
-    $privateText = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $KeyFile).Path)
-    foreach ($provider in @('openai','deepseek')) {
-        $matches = [regex]::Matches($privateText, ('(?im)^\s*' + $provider + '\s+api\s*[:：]\s*(sk-[A-Za-z0-9_-]+)\s*$'))
-        if ($matches.Count -ne 1) { throw "Expected exactly one $provider API key in the private key file." }
-        [Environment]::SetEnvironmentVariable(($provider.ToUpper() + '_API_KEY'),$matches[0].Groups[1].Value,'Process')
+    $packetMetadata = Get-Content -LiteralPath $Packet -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($packetMetadata.role -ne 'evaluation' -or $packetMetadata.settings.backend -ne 'openai') {
+        throw 'This local runner is reserved for OpenAI evaluation; DeepSeek training runs on the cluster.'
     }
+    $privateText = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $KeyFile).Path)
+    $keyMatches = [regex]::Matches($privateText, '(?im)^\s*openai\s+api\s*[:：]\s*(sk-[A-Za-z0-9_-]+)\s*$')
+    if ($keyMatches.Count -ne 1) { throw 'Expected exactly one OpenAI API key in the private key file.' }
+    $env:OPENAI_API_KEY = $keyMatches[0].Groups[1].Value
     $env:HTTP_PROXY = $ProxyUrl
     $env:HTTPS_PROXY = $ProxyUrl
     $env:PYTHONPATH = Join-Path $repoRoot 'src'
@@ -33,5 +35,5 @@ try {
 finally {
     foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name,$before[$name],'Process') }
     $privateText = $null
-    $matches = $null
+    $keyMatches = $null
 }

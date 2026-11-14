@@ -9,14 +9,27 @@ from .io import cell, digest, dump, fresh, prompt_rows, receipt, root, rows, ver
 from .reward import fit_bt
 
 
-def rollout(c):
+def rollout(c, shard_index=None, shards=1):
     from .hf import generate, load_lm, prompt_ids, sequence_stats, tokenizer
     p = root(c)
-    fresh(p / "pool.npz", p / "pool.jsonl")
-    t, m = tokenizer(c), load_lm(c)
     data = prompt_rows(c["choices"]["prompts"]["design"])
+    if type(shards) is not int or not 1 <= shards <= len(data):
+        raise ValueError("Rollout shards must be in 1..number of design prompts")
+    if shard_index is None:
+        if shards != 1:
+            raise ValueError("A sharded rollout needs an explicit shard index")
+        out, indices = p, list(range(len(data)))
+    else:
+        if type(shard_index) is not int or not 0 <= shard_index < shards:
+            raise ValueError("Invalid rollout shard index")
+        out = p / "rollout_shards" / f"part-{shard_index:02d}-of-{shards:02d}"
+        out.mkdir(parents=True, exist_ok=True)
+        indices = list(range(shard_index, len(data), shards))
+    fresh(out / "pool.npz", out / "pool.jsonl")
+    t, m = tokenizer(c), load_lm(c)
     features, logps, records = [], [], []
-    for i, r in enumerate(data):
+    for done, i in enumerate(indices):
+        r = data[i]
         ids = prompt_ids(t, r["messages"], c["candidate"]["max_prompt_tokens"])
         ff, ll = [], []
         for j in range(c["candidate"]["count"]):
@@ -27,10 +40,58 @@ def rollout(c):
             records.append({"prompt_index": i, "candidate": j, "prompt_id": r["id"], "messages": r["messages"], "prompt_tokens": ids, "response_tokens": response, "response": t.decode(response, skip_special_tokens=True), "forced_feature_eos": response[-1] != t.eos_token_id})
         features.append(ff)
         logps.append(ll)
-        print(f"rollout {i+1}/{len(data)}", flush=True)
-    np.savez_compressed(p / "pool.npz", phi=np.asarray(features, dtype=np.float32), logp=np.asarray(logps, dtype=np.float64))
-    write_rows(p / "pool.jsonl", records)
-    receipt(p / "pool.receipt.json", [p / "pool.npz", p / "pool.jsonl", p / "experiment.json"], feature="frozen_sft_final_layer_eos", sequence_logp="all_sampled_response_tokens_including_sampled_eos", feature_only_eos_append=True)
+        print(f"rollout {done+1}/{len(indices)} global_prompt={i}", flush=True)
+    arrays = {"phi": np.asarray(features, dtype=np.float32), "logp": np.asarray(logps, dtype=np.float64)}
+    extra = {}
+    if shard_index is not None:
+        arrays["prompt_indices"] = np.asarray(indices, dtype=np.int64)
+        extra = {"shard_index": shard_index, "shards": shards}
+    np.savez_compressed(out / "pool.npz", **arrays)
+    write_rows(out / "pool.jsonl", records)
+    receipt(out / "pool.receipt.json", [out / "pool.npz", out / "pool.jsonl", p / "experiment.json"], feature="frozen_sft_final_layer_eos", sequence_logp="all_sampled_response_tokens_including_sampled_eos", feature_only_eos_append=True, **extra)
+
+
+def merge_rollout(c, shards):
+    """Merge disjoint prompt shards in canonical order without resampling."""
+    p = root(c)
+    fresh(p / "pool.npz", p / "pool.jsonl", p / "pool.receipt.json")
+    data = prompt_rows(c["choices"]["prompts"]["design"])
+    if type(shards) is not int or not 1 <= shards <= len(data):
+        raise ValueError("Invalid rollout shard count")
+    count, phi, logp, records, dependencies = c["candidate"]["count"], None, None, {}, []
+    for shard in range(shards):
+        out = p / "rollout_shards" / f"part-{shard:02d}-of-{shards:02d}"
+        marker = out / "pool.receipt.json"
+        metadata = verify_receipt(marker)
+        if metadata.get("shard_index") != shard or metadata.get("shards") != shards:
+            raise ValueError("Rollout shard identity mismatch")
+        expected = list(range(shard, len(data), shards))
+        with np.load(out / "pool.npz", allow_pickle=False) as arrays:
+            indices, features, probs = arrays["prompt_indices"], arrays["phi"], arrays["logp"]
+            if indices.tolist() != expected or features.ndim != 3 or features.shape[:2] != (len(expected), count) or probs.shape != (len(expected), count):
+                raise ValueError("Rollout shard shape/indices mismatch")
+            if not np.isfinite(features).all() or not np.isfinite(probs).all():
+                raise ValueError("Nonfinite rollout shard")
+            if phi is None:
+                phi = np.empty((len(data), count, features.shape[-1]), dtype=np.float32)
+                logp = np.empty((len(data), count), dtype=np.float64)
+            if features.shape[-1] != phi.shape[-1]:
+                raise ValueError("Rollout feature dimensions differ across shards")
+            phi[indices], logp[indices] = features, probs
+        part = rows(out / "pool.jsonl")
+        if [(r["prompt_index"], r["candidate"]) for r in part] != [(i, j) for i in expected for j in range(count)]:
+            raise ValueError("Rollout shard records are missing, repeated or out of order")
+        for record in part:
+            i, j = record["prompt_index"], record["candidate"]
+            if record["prompt_id"] != data[i]["id"] or record["messages"] != data[i]["messages"]:
+                raise ValueError("Rollout shard prompt content mismatch")
+            records[i, j] = record
+        dependencies.append(marker)
+    np.savez_compressed(p / "pool.npz", phi=phi, logp=logp)
+    write_rows(p / "pool.jsonl", [records[i, j] for i in range(len(data)) for j in range(count)])
+    receipt(p / "pool.receipt.json", [p / "pool.npz", p / "pool.jsonl", p / "experiment.json"] + dependencies,
+            feature="frozen_sft_final_layer_eos", sequence_logp="all_sampled_response_tokens_including_sampled_eos", feature_only_eos_append=True, rollout_shards=shards)
+    return {"prompts": len(data), "responses": len(records), "shards": shards}
 
 
 def design(c):

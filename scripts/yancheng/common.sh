@@ -37,8 +37,8 @@ prism_forward_proxy_envs() {
 prism_stage_gpu() {
   local gpu=0
   case "$1" in
-    smoke|model-smoke|rollout|label|policy|evaluate-reference|evaluate-generate|evaluate-judge) gpu=1 ;;
-    cpu-smoke|stage-assets|prepare-data|design|sample|reward|aggregate|validate|judge-export|judge-import) gpu=0 ;;
+    smoke|model-smoke|rollout|rollout-shard|label|policy|evaluate-reference|evaluate-generate|evaluate-judge) gpu=1 ;;
+    cpu-smoke|stage-assets|prepare-data|merge-rollout|design|sample|cluster-label|reward|aggregate|validate|judge-export|judge-import) gpu=0 ;;
     *) prism_die "Unknown stage: $1" ;;
   esac
   # The Python config/backend layer computes resource needs. Bash receives that
@@ -61,6 +61,7 @@ prism_stage_resources() {
     case "$stage" in
       smoke|model-smoke) PRISM_DEFAULT_TIME=01:00:00 ;;
       rollout) PRISM_DEFAULT_TIME=24:00:00 ;;
+      rollout-shard) PRISM_DEFAULT_TIME=06:00:00 ;;
       policy|evaluate-reference|evaluate-generate|label|evaluate-judge) PRISM_DEFAULT_TIME=12:00:00 ;;
       *) prism_die "No GPU resource profile for stage: $stage" ;;
     esac
@@ -70,6 +71,8 @@ prism_stage_resources() {
       stage-assets) PRISM_DEFAULT_CPUS=4 PRISM_DEFAULT_MEMORY=6G PRISM_DEFAULT_TIME=04:00:00 ;;
       prepare-data) PRISM_DEFAULT_CPUS=16 PRISM_DEFAULT_MEMORY=24G PRISM_DEFAULT_TIME=06:00:00 ;;
       design) PRISM_DEFAULT_CPUS=16 PRISM_DEFAULT_MEMORY=24G PRISM_DEFAULT_TIME=12:00:00 ;;
+      merge-rollout) PRISM_DEFAULT_CPUS=4 PRISM_DEFAULT_MEMORY=6G PRISM_DEFAULT_TIME=01:00:00 ;;
+      cluster-label) PRISM_DEFAULT_CPUS=2 PRISM_DEFAULT_MEMORY=3G PRISM_DEFAULT_TIME=04:00:00 ;;
       sample) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=00:30:00 ;;
       reward) PRISM_DEFAULT_CPUS=8 PRISM_DEFAULT_MEMORY=12G PRISM_DEFAULT_TIME=04:00:00 ;;
       label) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=12:00:00 ;;

@@ -179,7 +179,7 @@ def run_packet(packet_path, results, *, execute=False, transport=None, workers=1
     return {"packet_id": packet["packet_id"], "completed": completed}
 
 
-def import_results(c, packet_path, results):
+def validate_packet(c, packet_path):
     packet = _load_packet(packet_path)
     if _hash(c) != packet["config_sha256"]:
         raise ValueError("Judge packet configuration changed")
@@ -189,6 +189,11 @@ def import_results(c, packet_path, results):
     role, tasks, _, _, _ = _tasks(c, packet["stage"], packet["method"], packet["budget"], packet["seed"])
     if tasks != packet["tasks"] or judge_settings(c, role) != packet["settings"]:
         raise ValueError("Judge packet requests do not match the cluster experiment")
+    return packet, tasks
+
+
+def import_results(c, packet_path, results):
+    packet, tasks = validate_packet(c, packet_path)
     _, indexed = _records(packet, results)
     by_id = {t["id"]: t for t in tasks}
     recorded = {_call_hash(by_id[tid], by_id[tid]["calls"][a]): r for (tid, a), r in indexed.items()}
