@@ -72,15 +72,17 @@ prism_stage_gpu() {
 
 prism_stage_resources() {
   # Set conservative one-process defaults. CPU memory follows q_amd_share's
-  # published 1500 MB/core limit; GPU jobs retain 8 CPUs and 64 GB host RAM.
+  # published 1500 MB/core limit. Generation has a measured 2-CPU/16G profile;
+  # PPO and GPU diagnostics retain 8 CPUs and 64 GB host RAM.
   local stage="$1" gpu="$2"
   if [[ "$gpu" == 1 ]]; then
     PRISM_DEFAULT_CPUS=8 PRISM_DEFAULT_MEMORY=64G
     case "$stage" in
       smoke|model-smoke) PRISM_DEFAULT_TIME=01:00:00 ;;
-      rollout) PRISM_DEFAULT_TIME=24:00:00 ;;
-      rollout-shard) PRISM_DEFAULT_TIME=06:00:00 ;;
-      policy|evaluate-reference|evaluate-generate|label|evaluate-judge) PRISM_DEFAULT_TIME=12:00:00 ;;
+      rollout) PRISM_DEFAULT_CPUS=2 PRISM_DEFAULT_MEMORY=16G PRISM_DEFAULT_TIME=24:00:00 ;;
+      rollout-shard) PRISM_DEFAULT_CPUS=2 PRISM_DEFAULT_MEMORY=16G PRISM_DEFAULT_TIME=06:00:00 ;;
+      evaluate-reference|evaluate-generate) PRISM_DEFAULT_CPUS=2 PRISM_DEFAULT_MEMORY=16G PRISM_DEFAULT_TIME=12:00:00 ;;
+      policy|label|evaluate-judge) PRISM_DEFAULT_TIME=12:00:00 ;;
       *) prism_die "No GPU resource profile for stage: $stage" ;;
     esac
   else

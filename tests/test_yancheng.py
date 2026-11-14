@@ -67,8 +67,12 @@ def test_stage_specific_resource_profiles_and_cpu_smoke(platform):
     assert "--cpus-per-task=16" in design.stdout and "--mem=24G" in design.stdout
     rollout = run("--dry-run", "rollout", "--config", shell_path(cfg))
     assert rollout.returncode == 0, rollout.stderr
-    assert "--cpus-per-task=8" in rollout.stdout and "--mem=64G" in rollout.stdout
+    assert "--cpus-per-task=2" in rollout.stdout and "--mem=16G" in rollout.stdout
     assert "--time=24:00:00" in rollout.stdout
+    policy = run("--dry-run", "policy", "--config", shell_path(cfg))
+    assert policy.returncode == 0 and "--cpus-per-task=8" in policy.stdout and "--mem=64G" in policy.stdout
+    evaluate = run("--dry-run", "evaluate-generate", "--config", shell_path(cfg))
+    assert evaluate.returncode == 0 and "--cpus-per-task=2" in evaluate.stdout and "--mem=16G" in evaluate.stdout
 
 
 def test_opportunistic_shard_array_keeps_one_gpu_per_task(platform):

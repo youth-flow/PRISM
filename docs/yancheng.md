@@ -240,3 +240,9 @@ wrapper可解析分区列表，但盐城实测拒绝关联指定分区的多分�
 `PRISM_ARRAY=FIRST-LAST%8 --shards 32`可只提交未完成的全局分片子集。
 安全迁移使用`PRISM_HOLD=1`先创建暂停的新数组，保留原运行任务，更新合并
 依赖，核对并撤下旧的等待任务，再释放新数组；不重算成功分片、不重复写同一片。
+
+生成核时优化：真实分片1977931以2 CPU/16G正常完成，94 prompts、376 responses、
+80453 tokens，elapsed 763秒、TotalCPU约763.65秒、MaxRSS 1240764 KiB。
+吞吐108.5 token/s，接近8核任务约113 token/s；产物receipt哈希、全局索引、
+2048维特征及logp有限性均通过。生成默认档更新为2 CPU/16G，
+只调整尚未启动的候选/评价生成任务；PPO和GPU诊断仍8 CPU/64G。
