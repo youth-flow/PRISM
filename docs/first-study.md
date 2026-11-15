@@ -48,7 +48,7 @@
 | policy/value clip | 0.2/0.2 |
 | value loss系数 | 0.1 |
 | gamma/GAE lambda | 1.0/0.95 |
-| max_grad_norm | 1.0 |
+| max_grad_norm | 配置1.0；实际TRL0.15.2循环未执行该裁剪，见[PPO更新复核](ppo-update-audit.md) |
 | LoRA r/alpha/dropout | 8/16/0 |
 | LoRA target | all-linear |
 | rollout forward microbatch | 4 |

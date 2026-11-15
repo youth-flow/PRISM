@@ -21,7 +21,7 @@
 | policy/value clip | 0.2 / 0.2 |
 | value loss coefficient | 0.1 |
 | gamma / GAE lambda | 1.0 / 0.95 |
-| max gradient norm | 1.0 |
+| max gradient norm | 配置1.0；当前TRL循环未执行该裁剪，见[PPO源码复核](ppo-update-audit.md) |
 | actor LoRA | r=8、alpha=16、dropout=0、all-linear |
 | response cap / temperature | 512 / 1.0 |
 | reward whitening / 固定区间缩放 | 未开启 / 未使用 |
