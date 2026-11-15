@@ -1,0 +1,8 @@
+src/prism/ppo_numerics.py contains a modified PPOTrainer.train method from
+Hugging Face TRL v0.15.2, Copyright 2025 The HuggingFace Team.
+Source: https://github.com/huggingface/trl/blob/v0.15.2/trl/trainer/ppo_trainer.py
+License: Apache License 2.0, included in Apache-2.0.txt.
+
+PRISM modifications: FP32 selected log probabilities, a pre-update probability
+consistency check, release of consumed generation logits, and valid-token
+diagnostic means. The upstream optimization equations and schedule are retained.

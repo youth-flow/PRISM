@@ -5,6 +5,10 @@
 结果是混合的：PRISM 的 IFEval 和 KL 点估计较好，Empirical 的 Luna 胜率较高；
 本轮没有证明 PRISM 在总体偏好上优于 Empirical。
 
+后续[数值修复与全链路敏感性检查](numerical-protocol.md)发现，BF16概率路径及
+上游K/q对精度敏感。原KL微小差异不用于方法排名；本报告保留原v1协议下结果。
+新协议已独立验收，后续正式实验需重建相应依赖，不能直接沿用旧q。
+
 ## 范围与时间口径
 
 模型为固定 revision 的 `allenai/OLMo-2-0425-1B-SFT`，不是重新训练 SFT。
