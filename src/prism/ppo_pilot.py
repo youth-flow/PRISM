@@ -23,7 +23,8 @@ from .io import digest, dump, load_config, receipt, rows, verify_receipt, write_
 from .numerics import configure_numerics
 
 
-GROUPS = {"A": (3e-6, 3e-6), "B": (3e-6, 3e-5), "C": (1e-5, 3e-5)}
+GROUPS = {"A": (3e-6, 3e-6, .95), "B": (3e-6, 3e-5, .95),
+          "C": (1e-5, 3e-5, .95), "D": (3e-5, 3e-5, .95), "E": (3e-5, 3e-5, 1.)}
 SPLIT_SALT = "prism-ppo-development-20261115-v1"
 
 
@@ -139,8 +140,8 @@ def main():
     dump(out/"split.json", {"salt": SPLIT_SALT, "training": [r["id"] for r in prompts],
                            "development": [r["id"] for r in development], "confirmation": [r["id"] for r in confirmation]})
     config = deepcopy(config)
-    actor_lr, critic_lr = GROUPS[args.group]
-    config["ppo"].update(learning_rate=actor_lr, critic_learning_rate=critic_lr)
+    actor_lr, critic_lr, gae_lambda = GROUPS[args.group]
+    config["ppo"].update(learning_rate=actor_lr, critic_learning_rate=critic_lr, lam=gae_lambda)
     dump(out/"effective-config.json", config)
     started = time.monotonic()
     report = {"job_id": job, "source_commit": args.source_commit, "method": args.method, "group": args.group,

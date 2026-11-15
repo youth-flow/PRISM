@@ -1,6 +1,14 @@
 import pytest
 
-from prism.ppo_pilot import development_split
+from prism.ppo_pilot import GROUPS, development_split
+
+
+def test_followup_groups_change_one_axis_at_a_time():
+    assert GROUPS["A"] == (3e-6, 3e-6, .95)
+    assert GROUPS["B"] == (3e-6, 3e-5, .95)
+    assert GROUPS["C"] == (1e-5, 3e-5, .95)
+    assert GROUPS["D"] == (3e-5, 3e-5, .95)
+    assert GROUPS["E"] == (3e-5, 3e-5, 1.)
 
 
 def test_development_split_is_order_independent_disjoint_and_complete():
