@@ -179,6 +179,10 @@ def _validate_structure(c):
     ppo = c["ppo"]
     for key in ("learning_rate", "kl_coef", "cliprange", "lora_alpha"):
         _number(ppo.get(key), f"ppo.{key}", strict=True)
+    if "critic_learning_rate" in ppo:
+        _number(ppo["critic_learning_rate"], "ppo.critic_learning_rate", strict=True)
+        if runtime.get("numerics") != "fp32_consistent_v1":
+            raise ValueError("ppo.critic_learning_rate requires the explicit FP32 protocol")
     _number(ppo.get("vf_coef"), "ppo.vf_coef")
     for key in ("cliprange_value", "max_grad_norm"):
         if key in ppo:

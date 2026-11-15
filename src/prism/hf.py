@@ -204,6 +204,8 @@ def train_ppo(c, target, w, prompts, seed):
     from transformers import AutoModel, set_seed
     from trl import PPOConfig, PPOTrainer
     numerics = configure_numerics(c)
+    if "critic_learning_rate" in c["ppo"] and not numerics:
+        raise ValueError("Separate critic learning rate requires the explicit FP32 PPO protocol")
     if numerics:
         from .ppo_numerics import FP32PPOTrainer
         PPOTrainer = FP32PPOTrainer
@@ -236,7 +238,8 @@ def train_ppo(c, target, w, prompts, seed):
     args = PPOConfig(output_dir=str(target), seed=seed, data_seed=seed, report_to="none", save_strategy="no", bf16=c["runtime"]["dtype"] == "bfloat16", fp16=False, use_cpu=c["runtime"]["device"] == "cpu", total_episodes=p["total_episodes"], response_length=p["response_length"], learning_rate=p["learning_rate"], per_device_train_batch_size=p["per_device_train_batch_size"], per_device_eval_batch_size=1, gradient_accumulation_steps=p["gradient_accumulation_steps"], num_mini_batches=p["num_mini_batches"], num_ppo_epochs=p["num_ppo_epochs"], kl_coef=p["kl_coef"], cliprange=p["cliprange"], vf_coef=p["vf_coef"], cliprange_value=p.get("cliprange_value", 0.2), gamma=p.get("gamma", 1.0), lam=p.get("lam", 0.95), max_grad_norm=p.get("max_grad_norm", 1.0), temperature=1.0, stop_token="eos", missing_eos_penalty=None, whiten_rewards=False, num_sample_generations=0, local_rollout_forward_batch_size=p.get("local_rollout_forward_batch_size", 1), dataloader_num_workers=0, logging_steps=1)
     peft = LoraConfig(r=p["lora_r"], lora_alpha=p["lora_alpha"], lora_dropout=0, target_modules=p["lora_target_modules"], task_type="CAUSAL_LM", bias="none")
     ds = Dataset.from_dict({"input_ids": ids})
-    trainer = PPOTrainer(args=args, processing_class=t, model=actor, ref_model=None, reward_model=reward, value_model=value, train_dataset=ds, eval_dataset=ds.select(range(min(2, len(ds)))), peft_config=peft)
+    options = {"critic_learning_rate": p["critic_learning_rate"]} if "critic_learning_rate" in p else {}
+    trainer = PPOTrainer(args=args, processing_class=t, model=actor, ref_model=None, reward_model=reward, value_model=value, train_dataset=ds, eval_dataset=ds.select(range(min(2, len(ds)))), peft_config=peft, **options)
     # TRL 0.15.2 gathers logits for the full rollout before applying its EOS mask.
     # HF early stopping creates variable-length padded rows, whose reserved pad ID
     # is outside the vocabulary. Generate full-length rows, then let TRL truncate
@@ -253,4 +256,6 @@ def train_ppo(c, target, w, prompts, seed):
     if numerics:
         result.update(numerics=numerics, probability_checks=trainer.probability_checks,
                       gradient_norm_clipping_executed=False)
+        if trainer.optimizer_group_report is not None:
+            result["optimizer_groups"] = trainer.optimizer_group_report
     return result

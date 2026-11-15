@@ -36,14 +36,24 @@ INVALID_LOGPROB = 1.0
 
 
 class FP32PPOTrainer(PPOTrainer):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, critic_learning_rate=None, **kwargs):
         if trl.__version__ != "0.15.2":
             raise RuntimeError("FP32 PPO extension is pinned to TRL 0.15.2")
+        self.critic_learning_rate = critic_learning_rate
+        self.optimizer_group_report = None
         super().__init__(*args, **kwargs)
         if self.args.bf16 or self.args.fp16 or torch.backends.cuda.matmul.allow_tf32:
             raise ValueError("FP32 PPO requires disabled mixed precision and TF32")
         require_fp32_model(self.model)
         self.probability_checks = []
+
+    def create_optimizer(self):
+        optimizer = super().create_optimizer()
+        if self.critic_learning_rate is not None and self.optimizer_group_report is None:
+            from .ppo_optim import separate_critic_learning_rate
+            self.optimizer_group_report = separate_critic_learning_rate(
+                self.optimizer, self.model, self.critic_learning_rate)
+        return optimizer
 
     @torch.no_grad()
     def check_probability_paths(self, query_responses, responses, old, reference, padding_mask, context_length, update):

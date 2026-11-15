@@ -95,7 +95,8 @@ def test_fp32_ppo_preserves_upstream_optimization_ast():
     assert ast.dump(original,include_attributes=False) == ast.dump(new,include_attributes=False)
 
 
-def test_fp32_protocol_real_olmo_ppo_passes_guards_and_updates_lora(tmp_path):
+@pytest.mark.parametrize("critic_rate", [None, .003])
+def test_fp32_protocol_real_olmo_ppo_passes_guards_and_updates_lora(tmp_path, critic_rate):
     pytest.importorskip("trl")
     from test_prism_model_contract import tiny_olmo2
     from prism.hf import train_ppo
@@ -111,10 +112,16 @@ def test_fp32_protocol_real_olmo_ppo_passes_guards_and_updates_lora(tmp_path):
                      "num_mini_batches":1,"num_ppo_epochs":1,"kl_coef":.05,"cliprange":.2,
                      "vf_coef":.1,"lora_r":2,"lora_alpha":4,"lora_target_modules":"all-linear"}}
     prompts = [{"messages":[{"role":"user","content":"hello world"}]}]*4
+    if critic_rate is not None:
+        config["ppo"]["critic_learning_rate"] = critic_rate
     result = train_ppo(config,tmp_path/"policy",np.linspace(-.1,.1,32),prompts,5)
     assert len(result["probability_checks"]) == 2
     assert all(row["zero_update_approxkl"] < 1e-7 for row in result["probability_checks"])
     assert result["numerics"]["protocol"] == "fp32_consistent_v1"
     assert result["gradient_norm_clipping_executed"] is False
+    if critic_rate is not None:
+        assert {g["role"] for g in result["optimizer_groups"]} == {"actor", "critic"}
+        assert all(g["initial_lr"] == (critic_rate if g["role"] == "critic" else .001)
+                   for g in result["optimizer_groups"])
     actor = PeftModel.from_pretrained(base,tmp_path/"policy")
     assert any(p.detach().abs().sum()>0 for n,p in actor.named_parameters() if "lora_B" in n)

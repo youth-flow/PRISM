@@ -1,0 +1,40 @@
+import pytest
+import torch
+from torch import nn
+
+from prism.ppo_optim import separate_critic_learning_rate
+
+
+def test_separate_rates_preserve_decay_coverage_and_scheduler_ratio():
+    model = nn.Module()
+    model.policy = nn.Module()
+    model.policy.lora_A = nn.Linear(3, 2, bias=False)
+    model.value_model = nn.Module()
+    model.value_model.score = nn.Linear(3, 1)
+    model.frozen = nn.Linear(3, 3).requires_grad_(False)
+    actor = list(model.policy.parameters())
+    weight, bias = list(model.value_model.parameters())
+    optimizer = torch.optim.AdamW([
+        {"params": actor + [weight], "weight_decay": .1},
+        {"params": [bias], "weight_decay": 0.},
+    ], lr=3e-6)
+    report = separate_critic_learning_rate(optimizer, model, 3e-5)
+    assert sum(g["parameters"] for g in report) == sum(p.numel() for p in model.parameters() if p.requires_grad)
+    assert [g["weight_decay"] for g in report] == [.1, .1, 0.]
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: 1-step/64)
+    for _ in range(8):
+        optimizer.zero_grad()
+        sum(p.sum() for p in model.parameters() if p.requires_grad).backward()
+        optimizer.step()
+        scheduler.step()
+    for group in optimizer.param_groups:
+        initial = 3e-6 if group["prism_role"] == "actor" else 3e-5
+        assert group["lr"] == pytest.approx(initial*56/64)
+    with pytest.raises(ValueError, match="before the first"):
+        separate_critic_learning_rate(optimizer, model, 3e-5)
+
+
+@pytest.mark.parametrize("rate", [0, -1, float("nan"), float("inf"), True])
+def test_separate_rates_reject_invalid_rate(rate):
+    with pytest.raises(ValueError, match="finite and positive"):
+        separate_critic_learning_rate(None, None, rate)
