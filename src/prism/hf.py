@@ -6,8 +6,11 @@ import numpy as np
 import torch
 from torch import nn
 
+from .numerics import configure_numerics, selected_logprobs
+
 
 def model_kwargs(c, role="sft"):
+    configure_numerics(c)
     return dict(revision=c["choices"][role]["revision"], local_files_only=c["runtime"]["local_files_only"], trust_remote_code=False, torch_dtype=getattr(torch, c["runtime"]["dtype"]), attn_implementation="eager")
 
 
@@ -69,7 +72,7 @@ def sequence_stats(m, prompt, response, eos):
     out = m(input_ids=inp, attention_mask=torch.ones_like(inp), output_hidden_states=True, use_cache=False, return_dict=True)
     logits = out.logits[0, len(prompt)-1:len(prompt)+len(response)-1].float()
     selected = torch.tensor(response, device=inp.device)
-    logp = logits.log_softmax(-1).gather(1, selected[:, None]).sum().item()
+    logp = selected_logprobs(logits, selected).sum().item()
     feature = out.hidden_states[-1][0, -1].float().cpu().numpy()
     return feature, float(logp)
 
@@ -200,6 +203,10 @@ def train_ppo(c, target, w, prompts, seed):
     from peft import LoraConfig
     from transformers import AutoModel, set_seed
     from trl import PPOConfig, PPOTrainer
+    numerics = configure_numerics(c)
+    if numerics:
+        from .ppo_numerics import FP32PPOTrainer
+        PPOTrainer = FP32PPOTrainer
     if int(__import__("os").environ.get("WORLD_SIZE", "1")) != 1:
         raise ValueError("v1 runner is single-process/single-GPU; do not silently change batch budgets")
     set_seed(seed)
@@ -242,4 +249,8 @@ def train_ppo(c, target, w, prompts, seed):
     # Some TRL diagnostic variances are undefined for a single tiny minibatch.
     # Preserve missingness as null, never write non-standard JSON NaN.
     history = [{k: (None if isinstance(v, float) and not np.isfinite(v) else v) for k, v in entry.items()} for entry in trainer.state.log_history]
-    return {"total_episodes": args.total_episodes, "rollout_batch_size": args.batch_size, "rollout_updates": args.num_total_batches, "ppo_epochs_per_rollout": args.num_ppo_epochs, "mini_batches_per_epoch": args.num_mini_batches, "kl_coef": args.kl_coef, "gamma": args.gamma, "gae_lambda": args.lam, "temperature": 1.0, "critic": "frozen_sft_plus_linear_head", "reference": "actor_base_with_lora_disabled", "log_history": history}
+    result = {"total_episodes": args.total_episodes, "rollout_batch_size": args.batch_size, "rollout_updates": args.num_total_batches, "ppo_epochs_per_rollout": args.num_ppo_epochs, "mini_batches_per_epoch": args.num_mini_batches, "kl_coef": args.kl_coef, "gamma": args.gamma, "gae_lambda": args.lam, "temperature": 1.0, "critic": "frozen_sft_plus_linear_head", "reference": "actor_base_with_lora_disabled", "log_history": history}
+    if numerics:
+        result.update(numerics=numerics, probability_checks=trainer.probability_checks,
+                      gradient_norm_clipping_executed=False)
+    return result

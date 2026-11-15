@@ -129,6 +129,9 @@ def _validate_structure(c):
     runtime = _mapping(c.get("runtime"), "runtime")
     if runtime.get("device") not in ("cpu", "cuda") or runtime.get("dtype") not in ("float32", "bfloat16"):
         raise ValueError("runtime supports cpu/cuda and float32/bfloat16")
+    if "numerics" in runtime:
+        if runtime["numerics"] != "fp32_consistent_v1" or runtime["dtype"] != "float32":
+            raise ValueError("runtime.numerics=fp32_consistent_v1 requires dtype=float32")
     _boolean(runtime.get("local_files_only"), "runtime.local_files_only")
     data = _mapping(c.get("data"), "data")
     source = _mapping(data.get("source"), "data.source")

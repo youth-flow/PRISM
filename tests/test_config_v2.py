@@ -145,6 +145,18 @@ def test_api_fields_are_provider_aware_and_not_hf_revisions(tmp_path):
         load_v2(path, c)
 
 
+def test_strict_probability_protocol_rejects_bf16_and_unknown_modes(tmp_path):
+    path, c = fixture_v2(tmp_path)
+    c["runtime"]["numerics"] = "fp32_consistent_v1"
+    load_v2(path,c)
+    c["runtime"]["dtype"] = "bfloat16"
+    with pytest.raises(ValueError,match="numerics"):
+        load_v2(path,c)
+    c["runtime"].update(dtype="float32",numerics="unrecognized")
+    with pytest.raises(ValueError,match="numerics"):
+        load_v2(path,c)
+
+
 def test_ready_rejects_duplicate_prompt_content_even_with_distinct_ids(tmp_path, monkeypatch):
     path, c = fixture_v2(tmp_path)
     fake_benchmark_backend(monkeypatch)
