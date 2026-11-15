@@ -225,6 +225,12 @@ PPO KL 系数的相互作用、评价噪声。它们目前是待检验解释，�
 
 ## 下一步建议
 
+2026-11-15 的只读分布诊断补充：PRISM 前 1% 比较边承载 88.33% 概率，
+实际每组 1024 标签仅覆盖 266/269 条不同边、242/243 个 prompt；
+Empirical 分别覆盖 993/997 条边、865/864 个 prompt。四组原 seed 抽样重放
+完全一致。后续应同时检查 PPO 优化有效性与集中采样后的 Reward 泛化，
+不能把原因仅归于 PPO 强度。完整口径见 [抽样分布诊断](sampling-distribution-analysis.md)。
+
 先使用已有产物做分析，不新增 GPU 或 Judge 调用：按 prompt 配对分析 IFEval
 差异和 Luna 判断，分解 AB/BA 不一致、平局及失败类型；检查固定评价样本上的
 Reward 排序与 Luna 是否一致，沿已保存的 PPO 日志比较 reward、KL、长度轨迹。
