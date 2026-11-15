@@ -420,3 +420,15 @@ Luna返回input_tokens=4404892，output_tokens=563007（已含521900 reasoning�
 d7b6db16d0f78a73a016b90d9fe9f2483ea41a86b0add35418124b1f0d0748bd，
 final.audit.receipt.json为eefabae9716fc92404c362e047bf035e3e4cce373e6f361115302151103eeb6c。
 两者及summary.json/results.csv/comparisons.csv的本机副本已逐项与集群最终receipt核对。
+
+## 完成后的PPO专项检查
+
+按用户要求，在原结果之外进行独立诊断，详见[动态报告](ppo-dynamic-audit.md)。
+1979667/68各128 episodes、2轮rollout、8次真实AdamW更新通过；前两轮训练history
+除墙钟eps外与原生产完全相同，EOS/mask/Reward/GAE/梯度累积/LoRA更新核对通过。
+1979678零更新对照显示BF16完整/缓存前向approxKL约4.84e-4，FP32为1.82e-11；
+不能再据原小approxKL判定训练强度。1979672固定终点目标正对照显示critic在
+3e-6和256步下拟合慢，独立提高头学习率有效，但未验证完整PPO收益。
+max_grad_norm未执行的问题仍单独记录。初版插桩1979605/06第二轮OOM保留FAILED，
+不能归为原生产失败；含失败共追加0.478611 GPU卡时、3.727222 CPU核时，零API。
+所有诊断作业已结束，原冻结配置/四组策略/主要评价不变，尚未启动新正式对照。
