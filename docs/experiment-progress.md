@@ -5,6 +5,28 @@
 Empirical/PRISM、seeds 11/23、每单元1024有效标签、4096 PPO episodes。
 全部生成与数值计算使用集群计算节点，DeepSeek在集群CPU、Luna在本机。
 
+## 最终结果（2026-11-15）
+
+六阶段全部完成，最终离线验收1979130通过。下表为固定1024有效训练标签预算、
+seeds 11/23的算术平均；Luna胜率含TIE半分，先在每个prompt内平均AB/BA。
+
+| 方法 | Luna对SFT胜率 | IFEval prompt strict | 序列KL MC均值 |
+| --- | --- | --- | --- |
+| Empirical | 52.45% | 45.66% | 0.010910 |
+| PRISM | 50.43% | 47.41% | 0.003536 |
+
+共享SFT的IFEval prompt strict为46.95%。本轮PRISM的IFEval均值较高、KL估计
+更接近0；Empirical的Luna对SFT胜率较高。PRISM直接对Empirical的胜率为：
+seed11=48.70%（95% bootstrap区间46.05%–51.80%），seed23=47.65%
+（44.70%–50.45%）。两区间均包含50%，不据此宣称PRISM整体优胜。
+KL是500条回答的有限样本MC估计，保留负值及其标准误；两种seed的变异单独报告。
+完整单元数据、比较区间与汇总分别在results.csv、comparisons.csv、summary.json。
+
+API费用按已返回usage和2026-11-15官方价格核算：DeepSeek约3.0249元；
+Luna约$0.77999，含默认30分钟缓存写入费用。更早的准备调用和中断时未返回
+usage的请求不在该精确计数范围，实际账单可能有少量差异。
+正式运行产物与权重留在online1；本机交付副本位于忽略的local/final-study。
+
 ## 2026-11-15：正式实验进展
 
 | 阶段 | 当前状态 | 完成验收条件 |
@@ -14,7 +36,7 @@ Empirical/PRISM、seeds 11/23、每单元1024有效标签、4096 PPO episodes。
 | 3 DeepSeek标注与Reward | 已完成；4096有效标签、四份Reward及独立验收1978770–1978773全部通过 | 统一v4协议；原始API流、固定draw/seed/flip及哈希回放；独立BT目标与梯度核对 |
 | 4 PPO | 已完成；四单元及独立验收全部通过 | 各4096 episodes/64 updates；数值、adapter与训练receipt通过 |
 | 5 评价生成、KL、IFEval | 已完成；四组产物及独立KL抽查全部通过 | 各500条匹配评价、541条官方IFEval；相对冻结SFT的序列KL |
-| 6 本机Luna与汇总 | 本机四单元并行判断中，待集群导入和汇总 | 6000个成功AB/BA判断；导入核对哈希、位置还原与计分；汇总四单元及SFT |
+| 6 本机Luna与汇总 | 已完成；6000有效判断、四组导入、汇总及最终独立验收通过 | 6000个成功AB/BA判断；导入核对哈希、位置还原与计分；汇总四单元及SFT |
 
 候选分片0保留原源码faffcbc，其余使用只改变调度和GPU检查的07142cc。
 作业覆盖：1977818=0，1977894=1–15，1977899=16–25，1977900=26–31。
@@ -366,3 +388,35 @@ Luna前513条返回386104输入（1579缓存）、45488输出（含reasoning）�
 预计约$0.7–1.2。最终费用按全部实际返回usage及平台账单复核。
 价格来源：[DeepSeek](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)、
 [OpenAI](https://developers.openai.com/api/docs/pricing)。
+
+## 第六阶段与端到端完成验收
+
+四个本机worker均exit_code=0；成功任务共6000个，原始记录6008次（7次截断、
+1次格式失败的重试全部保留）。原协议v1、gpt-6-luna、low、max_output_tokens=1024
+保持不变。四个集群CPU导入1979115–1979118分别用13/14/13/13秒完成，
+汇总1979119用9秒完成，四单元和六项比较无缺失。GPU及本机API进程均已结束。
+
+最终核验1979130用11秒通过，源SHA256为
+0f3f15209ec217e07a38726cbab70c1784d3c109503db3a542c19b4e4ff151f2。
+从原始Luna记录独立解析A/B/TIE并还原展示方向，核对全部task、seed、顺序与重试，
+重算每prompt的AB/BA均值、标准误和原2000次bootstrap区间，再核对四单元KL/
+IFEval、两seed汇总均值/标准差、4行results.csv及6行comparisons.csv。
+同时复核当前阶段receipts、32片及合并池有限性/维度、原Design gap、4096训练观测、
+4份4096-episode策略和全部评价产物依赖。全程核验零API调用，未改实验结果。
+
+早期最终核验1979122因审计脚本遗漏bootstrap默认值停止，1979123在已完成统计
+核对后发现不能假定缓存写入为零；两份失败记录保留。按原实现get(...,2000)
+及官方输入费用分桶修正审计，未更改研究配置、bootstrap次数、已计分指标或调用API。
+
+Luna返回input_tokens=4404892，output_tokens=563007（已含521900 reasoning），
+其中缓存读取33459、默认30m写入2440414、12h写入0，普通输入1931019。
+按每百万普通输入$0.10、读取$0.01、30m写入$0.125、输出$0.50，合计$0.77999174。
+此前约$0.72的初算漏计写入与普通输入之间的价差，已补入$0.06101035；
+缓存写入采用对应完整费率，不在同一批输入上重复叠加普通输入费用。
+依据：[OpenAI价格](https://developers.openai.com/api/docs/pricing)、
+[缓存计费规则](https://developers.openai.com/api/docs/guides/prompt-caching)。
+
+交付校验值：final.audit.json SHA256为
+d7b6db16d0f78a73a016b90d9fe9f2483ea41a86b0add35418124b1f0d0748bd，
+final.audit.receipt.json为eefabae9716fc92404c362e047bf035e3e4cce373e6f361115302151103eeb6c。
+两者及summary.json/results.csv/comparisons.csv的本机副本已逐项与集群最终receipt核对。
