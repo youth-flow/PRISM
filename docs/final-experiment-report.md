@@ -231,6 +231,12 @@ Empirical 分别覆盖 993/997 条边、865/864 个 prompt。四组原 seed 抽�
 完全一致。后续应同时检查 PPO 优化有效性与集中采样后的 Reward 泛化，
 不能把原因仅归于 PPO 强度。完整口径见 [抽样分布诊断](sampling-distribution-analysis.md)。
 
+进一步使用原标签做不新增调用的事后交叉留出诊断：排除两方法Reward训练
+出现过的全部prompt后，四个Reward对另一seed已有标签的准确率约55%–60%，
+BT logloss约1.21–1.24。PRISM与Empirical评价回答约39%–40%逐字相同，
+这些全部被Luna判平。诊断边界、分数范围与Judge一致性见
+[Reward/PPO/Judge诊断](reward-ppo-judge-diagnostics.md)，不改写本轮主要指标。
+
 先使用已有产物做分析，不新增 GPU 或 Judge 调用：按 prompt 配对分析 IFEval
 差异和 Luna 判断，分解 AB/BA 不一致、平局及失败类型；检查固定评价样本上的
 Reward 排序与 Luna 是否一致，沿已保存的 PPO 日志比较 reward、KL、长度轨迹。
