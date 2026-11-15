@@ -445,3 +445,20 @@ gap9.80154e-5；特征相对变化2.374%但K变化86.922%、q总变差0.803809�
 最终1980542通过全部新产物与原冻结hash核对，完整说明见
 [数值修复](numerical-protocol.md)及[Judge/Reward工程判断](judge-reward-assessment.md)。
 本次零API，含失败环境验收共0.468333 GPU卡时、5.368333 CPU核时；所有任务结束。
+
+## PPO参数短程探索完成
+
+用户授权探索PPO参数后，固定源2cd8862/a9b80d4分别通过完整集群182/183项检查。
+两套既有Reward、seed11，五组actor/critic LR与GAE对照共10个512-episode单元，
+保留4096学习率日程，合计5120 episodes/320真实AdamW步；全部COMPLETED。
+64开发/64确认提示独立留出，最终评价未参与选参，未调用Judge。
+
+共同开发指标排序C>B≈A>D>E，建议下一轮以actor1e-5、critic3e-5、lambda.95、
+KL.05、batch64、2 epochs为统一起点。3e-5 actor和lambda1没有开发收益依据。
+确认C减A自身Reward：Empirical+.48689（95%[-.08448,1.23360]）、
+PRISM-.07273（[-.49030,.29045]），没有证明稳定改善，也不作为胜率结论。
+critic的实际拟合加快，但512条未充分拟合；新正式4096/8192没有启动。
+
+独立1980635/1980657及含四确认的最终1980686全部通过。20个分配均完成，
+5.8611 GPU卡时/45.3778分配CPU核时，CPU约1.82元、API为0；无遗留作业。
+原冻结配置、Design与正式最终审计未变，详见[参数探索报告](ppo-parameter-pilot.md)。

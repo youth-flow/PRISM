@@ -5,6 +5,8 @@
 不微调backbone（也不增加Reward LoRA）。PPO actor原定LoRA训练不受此约束。
 以下记录建议与约束，尚未启动新标注
 或完整训练，也未把建议参数写入冻结实验配置。
+其中PPO短程选参已随后完成，当前推荐actor1e-5/critic3e-5/lambda.95作为下一轮
+起点，确认集优势未达显著；完整记录见[短程报告](ppo-parameter-pilot.md)。
 
 ## K与重建Design
 
@@ -137,4 +139,5 @@ PPO短程校准建议固定Reward、prompt、seed和4096总episode学习率日�
 短跑以独立开发prompt上的自身Reward、KL、value误差和梯度稳定性验收，不要求
 每次Adam更新的surrogate loss单调。4096作为首个正式训练量，只有开发曲线仍上升
 才把所有单元统一延长；若采用8192新日程，则全部方法同样采用，不把不同日程
-的前4096步冒称完全相同。该三组对照尚未执行。
+的前4096步冒称完全相同。该三组及追加D/E的两Reward短程对照后已完成；
+实测结果与独立确认见[短程报告](ppo-parameter-pilot.md)，本节前文为执行前建议。
