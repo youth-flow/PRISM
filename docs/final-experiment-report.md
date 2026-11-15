@@ -237,6 +237,10 @@ BT logloss约1.21–1.24。PRISM与Empirical评价回答约39%–40%逐字相同
 这些全部被Luna判平。诊断边界、分数范围与Judge一致性见
 [Reward/PPO/Judge诊断](reward-ppo-judge-diagnostics.md)，不改写本轮主要指标。
 
+进一步的[校准与有效性复核](diagnostic-validation-2026-11-15.md)已完成80次
+独立记录的参考判断（$0.204478）和单卡57秒既有回答打分；四组自身Reward
+变化均未检出稳定正收益，建议先做小规模PPO有效更新验证，再决定增强训练。
+
 先使用已有产物做分析，不新增 GPU 或 Judge 调用：按 prompt 配对分析 IFEval
 差异和 Luna 判断，分解 AB/BA 不一致、平局及失败类型；检查固定评价样本上的
 Reward 排序与 Luna 是否一致，沿已保存的 PPO 日志比较 reward、KL、长度轨迹。
