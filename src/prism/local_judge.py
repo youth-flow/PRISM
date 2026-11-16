@@ -149,6 +149,14 @@ def export_packet(c, stage, method, budget, seed, destination, *, evaluation_fle
         packet['evaluation_profile']=evidence
         packet['settings']=evidence['profile']['judges']['evaluation']
         packet['input_sha256'][evidence['path']]=evidence['sha256']
+        if c['choices']['benchmark'].get('kind') == 'ifeval':
+            from .scoring_protocol import effective_benchmark, RECEIPT, METRICS, PROTOCOL
+            directories = [root(c)/'reference'] + [cell(c, name, budget, seed) for name in c['methods']]
+            for directory in directories:
+                effective_benchmark(c, directory, required=True)
+                for name in (RECEIPT, METRICS):
+                    packet['input_sha256'][str(directory/name)] = digest(directory/name)
+            packet['benchmark_scoring_protocol'] = PROTOCOL
     packet["packet_id"] = _hash(packet)
     destination = Path(destination)
     if destination.exists():

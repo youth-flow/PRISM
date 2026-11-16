@@ -72,6 +72,14 @@ def validate_evidence(packet,c=None,full_tasks=None):
         raise ValueError('Evaluation profile evidence mismatch')
     if c is not None and (digest(evidence['path'])!=evidence['sha256'] or load_profile(evidence['path'],c)!=profile):
         raise ValueError('Evaluation profile bytes changed')
+    if c is not None and c['choices']['benchmark'].get('kind') == 'ifeval':
+        from .scoring_protocol import effective_benchmark, PROTOCOL, RECEIPT, METRICS
+        if packet.get('benchmark_scoring_protocol') != PROTOCOL:
+            raise ValueError('Explicit V2 evaluation requires fixed-RNG benchmark evidence')
+        for directory in [root(c)/'reference'] + [cell(c,name,packet['budget'],packet['seed']) for name in c['methods']]:
+            effective_benchmark(c,directory,required=True)
+            if any(packet['input_sha256'].get(str(directory/name)) != digest(directory/name) for name in (RECEIPT,METRICS)):
+                raise ValueError('Evaluation packet omitted fixed-RNG scoring inputs')
     subset=packet.get('task_subset')
     if subset is not None:
         if profile['evaluation_role']!='crosscheck':raise ValueError('Only crosscheck packets can select a subset')

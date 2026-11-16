@@ -224,7 +224,10 @@ def evaluate_judge(c, method, budget, seed, *, judge_factory=None, settings_over
     comparisons = [_comparison(c, comp, data, complete, budget, seed, i) for i, comp in owned]
     own = sources[method]
     kl, kl_se = _mean_se([r["sampled_sequence_log_ratio"] for r in own])
-    scored = json.loads((out/"benchmark.metrics.json").read_text(encoding="utf-8"))
+    from .scoring_protocol import effective_benchmark, RECEIPT
+    scored = effective_benchmark(c, out, required=settings_override is not None)
+    if (out/RECEIPT).exists():
+        dependencies.append(out/RECEIPT)
     versus_sft = [r["win_rate"] if r["left"] == method else 1-r["win_rate"] for r in comparisons if {r["left"], r["right"]} == {method, "sft"}]
     result = {"method": method, "budget": budget, "seed": seed, "training_judge_calls": labels["actual_judge_calls"],
               "evaluation_judge_calls": len(previous), "evaluation_prompts": len(data), "win_rate_vs_sft": versus_sft[0] if versus_sft else None,
@@ -233,6 +236,8 @@ def evaluate_judge(c, method, budget, seed, *, judge_factory=None, settings_over
               "truncation_rate": float(np.mean([r.get("truncated", False) for r in own])),
               "benchmark_name": c["choices"]["benchmark"]["name"], "benchmark_metric": scored["metric"],
               "benchmark_score": scored["score"], "benchmark_metrics": scored["metrics"], "comparisons": comparisons}
+    if 'scoring_protocol' in scored:
+        result['benchmark_scoring_protocol'] = scored['scoring_protocol']
     dump(out/"metrics.json", result)
     receipt(done, [out/"metrics.json", path, out/"labels.receipt.json"]+dependencies)
     return result
@@ -322,6 +327,11 @@ def aggregate(c,*,budgets=None,scope_path=None):
     if (reference/"reference.receipt.json").exists():
         verify_receipt(reference/"reference.receipt.json")
         sft = json.loads((reference/"metrics.json").read_text(encoding="utf-8"))
+        from .scoring_protocol import effective_benchmark, RECEIPT
+        if (reference/RECEIPT).exists():
+            scored = effective_benchmark(c, reference, required=True)
+            sft.update(benchmark_metric=scored['metric'], benchmark_score=scored['score'],
+                       benchmark_metrics=scored['metrics'], benchmark_scoring_protocol=scored['scoring_protocol'])
     dump(target/"summary.json", {"complete": not missing, "missing_cells": missing, "groups": groups, "sft": sft,
                            'active_budgets':active,'requested_budgets':c['budgets'],
                            'deferred_budgets':[n for n in c['budgets'] if n not in active and n not in cancelled],
@@ -332,6 +342,8 @@ def aggregate(c,*,budgets=None,scope_path=None):
                            "note": "AB/BA is averaged within each prompt before uncertainty estimation. Training-seed variability is separate; finite-sample MC KL may be negative."})
     dependencies=[target/name for name in ('summary.json','results.csv','comparisons.csv') if (target/name).exists()]+[p/'experiment.json']
     dependencies += [cell(c,r['method'],r['budget'],r['seed'])/'evaluation.receipt.json' for r in records]
+    if (reference/'benchmark.fixed.receipt.json').exists():
+        dependencies.append(reference/'benchmark.fixed.receipt.json')
     if scope is not None:dependencies.append(scope_path)
     receipt(target/'aggregation.receipt.json',dependencies,active_budgets=active,cancelled_budgets=cancelled,full_frozen_matrix_complete=not missing and full)
     return {"completed": len(records), "missing": len(missing), "output": str(target/"summary.json")}
