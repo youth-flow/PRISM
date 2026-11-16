@@ -194,6 +194,9 @@ def test_v2_metadata_and_audit_stages_never_request_gpu(platform):
     result=subprocess.run([bash,shell_path(repo/'scripts/yancheng/submit_v2.sh'),'--dry-run','policy','--config',shell_path(cfg)],
                           env={**env,'PRISM_GPU_PARTITION':'q_a100,q_4090'},capture_output=True,text=True)
     assert result.returncode!=0 and 'one verified GPU partition' in result.stderr
+    actual=subprocess.run([bash,shell_path(repo/'scripts/yancheng/submit_v2.sh'),'policy','--config',shell_path(cfg)],
+                          env=env,capture_output=True,text=True)
+    assert actual.returncode!=0 and 'Test mode can only construct dry runs' in actual.stderr
 
 
 def test_release_bundle_is_checked_out_once_without_overwriting_existing_source(platform):
