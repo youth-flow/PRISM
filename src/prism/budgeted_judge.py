@@ -21,7 +21,7 @@ import yaml
 
 from .api_budget import BudgetExceeded, BudgetTransport, DispatchPaused, USDBudget
 from .io import digest, dump, rows
-from .judges import APIJudge
+from .judges import APIJudge,_NoRedirect
 from .local_judge import _load_packet, _records, _transport_retry_protocol, NETWORK_RETRY_LIMIT, run_packet
 
 
@@ -304,6 +304,15 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
 _WORKER_PAUSE_REASON='Worker stopped; inspect saved results before resuming'
 
 
+def _model_healthcheck(settings):
+    key=os.environ.get(settings['api_key_env'])
+    if not key:return False
+    try:
+        with build_opener(_NoRedirect()).open(Request('https://api.openai.com/v1/models',headers={'Authorization':'Bearer '+key}),timeout=15) as response:
+            return response.status==200
+    except (OSError,HTTPError,URLError):return False
+
+
 def _only_network_pause(status,budget_state):
     failures=status.get('transport_failures') or []
     network={'URLError','TimeoutError','ConnectionError','ConnectionResetError','RemoteDisconnected','SSLError','SSLEOFError'}
@@ -342,12 +351,7 @@ def supervise_manifest(path,*,execute=False,transport=None,poll_seconds=20,netwo
     if max_network_resumes and any(p['role']!='training' for _,p in loaded):
         raise ValueError('Automatic network recovery is restricted to checked training')
     def available():
-        settings=loaded[0][1]['settings'];key=os.environ.get(settings['api_key_env'])
-        if not key:return False
-        try:
-            with build_opener().open(Request('https://api.openai.com/v1/models',headers={'Authorization':'Bearer '+key}),timeout=15) as response:
-                return response.status==200
-        except (OSError,HTTPError,URLError):return False
+        return _model_healthcheck(loaded[0][1]['settings'])
     healthcheck=healthcheck or available
     for resumed in range(max_network_resumes+1):
         try:

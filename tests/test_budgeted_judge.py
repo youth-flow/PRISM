@@ -207,6 +207,22 @@ def test_network_recovery_never_accepts_budget_auth_or_internal_failure(failure)
     assert not _only_network_pause(status,{'paused':True,'pause_reason':_WORKER_PAUSE_REASON})
 
 
+def test_health_check_refuses_redirects_and_missing_credentials(monkeypatch):
+    from prism import budgeted_judge as module
+    monkeypatch.delenv('PRISM_HEALTH_KEY',raising=False)
+    assert module._model_healthcheck({'api_key_env':'PRISM_HEALTH_KEY'}) is False
+    monkeypatch.setenv('PRISM_HEALTH_KEY','TEST_KEY');calls=[]
+    class Opener:
+        def open(self,request,timeout):
+            calls.append(request.full_url);assert timeout==15
+            raise HTTPError(request.full_url,302,'redirect',{},None)
+    def build(handler):
+        assert isinstance(handler,module._NoRedirect);return Opener()
+    monkeypatch.setattr(module,'build_opener',build)
+    assert module._model_healthcheck({'api_key_env':'PRISM_HEALTH_KEY'}) is False
+    assert calls==['https://api.openai.com/v1/models']
+
+
 def test_cached_final_slot_retransmission_recovers_without_another_request(tmp_path,monkeypatch):
     from prism.local_judge import run_packet
     manifest,b,path=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
