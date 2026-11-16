@@ -162,12 +162,20 @@ class USDBudget:
             current=self._effective_limits(db)
         return self._change_limits(current['total']/1e6,purposes,reason,reallocate=True)
 
+    def authorize_limits(self, *, total_usd, purposes, reason):
+        """Apply an explicitly authorized revision within the original total.
+
+        Historical contract, requests, usage and unknown reservations stay intact.
+        This operator action requires drained, paused dispatch and blocked training.
+        """
+        return self._change_limits(total_usd,purposes,reason,reallocate=True,authorized=True)
+
     def _effective_limits(self, db):
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_ceiling'").fetchone():
             return dict(db.execute("SELECT purpose,amount FROM live_ceiling").fetchall()) or self.limits
         return self.limits
 
-    def _change_limits(self,total_usd,purposes,reason,*,reallocate):
+    def _change_limits(self,total_usd,purposes,reason,*,reallocate,authorized=False):
         requested={"total":micro_usd(total_usd),**{k:micro_usd(v) for k,v in purposes.items()}}
         if set(requested)!=set(self.limits) or any(v<=0 for v in requested.values()) or not reason.strip():
             raise ValueError("Specify every existing positive ceiling and an audit reason")
@@ -175,7 +183,19 @@ class USDBudget:
             db.execute("CREATE TABLE IF NOT EXISTS live_ceiling (purpose TEXT PRIMARY KEY, amount INTEGER NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS ceiling_change (id INTEGER PRIMARY KEY, changed_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, previous TEXT NOT NULL, revised TEXT NOT NULL, reason TEXT NOT NULL)")
             current=self._effective_limits(db)
-            if (requested['total']>current['total'] or any(requested[k]>self.limits[k] for k in requested)
+            if authorized:
+                if not all(db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(name,)).fetchone()
+                           for name in ('dispatch_control','purpose_dispatch_control')):
+                    raise ValueError('Authorized revision requires paused dispatch and blocked training')
+                paused=db.execute('SELECT paused FROM dispatch_control WHERE id=1').fetchone()
+                training=db.execute("SELECT paused FROM purpose_dispatch_control WHERE purpose='training'").fetchone()
+                if not paused or not paused[0] or not training or not training[0]:
+                    raise ValueError('Authorized revision requires paused dispatch and blocked training')
+                if db.execute("SELECT COUNT(*) FROM dispatch WHERE status='reserved'").fetchone()[0]:
+                    raise ValueError('Drain in-flight dispatches before an authorized revision')
+                if requested['total']>self.limits['total'] or any(v>requested['total'] for v in requested.values()):
+                    raise ValueError('Authorized ceilings cannot exceed the original total contract')
+            elif (requested['total']>current['total'] or any(requested[k]>self.limits[k] for k in requested)
                     or (not reallocate and any(requested[k]>current[k] for k in requested))):
                 raise ValueError("Live ceilings can only tighten; never reset spent amounts")
             usage={k:0 for k in requested}

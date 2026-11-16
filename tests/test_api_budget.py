@@ -10,6 +10,34 @@ import pytest
 from prism.api_budget import BudgetExceeded, BudgetTransport, DispatchPaused, USDBudget, journal_mode, usage_micro_usd
 
 
+def test_explicit_authorized_evaluation_revision_keeps_original_contract_and_unknown_fees(tmp_path):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=54,purposes={'calibration':3,'training':46,'evaluation':5})
+    payload={'model':'gpt-6.1-sol','max_output_tokens':100,'input':[]}
+    b.reserve('old-unknown','training','gpt-6.1-sol',payload);b.uncertain('old-unknown')
+    b.tighten_limits(total_usd=39,purposes={'calibration':2,'training':35.5,'evaluation':1.8},reason='Previous cap')
+    before=b.snapshot()
+    with b.transaction() as db:original=db.execute('SELECT value FROM contract WHERE id=1').fetchone()[0]
+    with pytest.raises(ValueError,match='paused dispatch'):
+        b.authorize_limits(total_usd=54,purposes={'calibration':2,'training':31,'evaluation':21.5},reason='Authorized Sol evaluation')
+    b.control(True,'Drain first');b.control_purpose('training',True,'User cancels remaining training tier')
+    b.authorize_limits(total_usd=54,purposes={'calibration':2,'training':31,'evaluation':21.5},reason='User selects Sol full evaluation, USD21.50')
+    assert b.snapshot()==before
+    with b.transaction() as db:assert db.execute('SELECT value FROM contract WHERE id=1').fetchone()[0]==original
+    with pytest.raises(ValueError,match='original total'):
+        b.authorize_limits(total_usd=55,purposes={'calibration':2,'training':31,'evaluation':21.5},reason='Too high')
+    b.control(False,'Evaluation only')
+    with pytest.raises(DispatchPaused):b.reserve('forbidden-training','training','gpt-6.1-sol',payload)
+    b.reserve('allowed-evaluation','evaluation','gpt-6.1-sol',payload)
+
+
+def test_authorized_revision_refuses_inflight_requests(tmp_path):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=54,purposes={'calibration':3,'training':46,'evaluation':5})
+    b.reserve('inflight','training','gpt-6.1-sol',{'model':'gpt-6.1-sol','max_output_tokens':100,'input':[]})
+    b.control(True,'Drain');b.control_purpose('training',True,'Cancelled tier')
+    with pytest.raises(ValueError,match='Drain in-flight'):
+        b.authorize_limits(total_usd=54,purposes={'calibration':2,'training':31,'evaluation':21.5},reason='Approved')
+
+
 @pytest.mark.parametrize('version,expected',[((3,50,0),'DELETE'),((3,50,7),'WAL'),((3,44,6),'WAL'),((3,45,0),'DELETE'),((3,51,2),'DELETE'),((3,51,3),'WAL')])
 def test_unpatched_sqlite_does_not_enable_wal(version,expected):
     assert journal_mode(version)==expected

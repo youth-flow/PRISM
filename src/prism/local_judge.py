@@ -114,7 +114,7 @@ def _execution_settings(settings, role, overrides):
     return {**settings,**overrides}
 
 
-def export_packet(c, stage, method, budget, seed, destination, *, evaluation_flex=False, execution_profile=None):
+def export_packet(c, stage, method, budget, seed, destination, *, evaluation_flex=False, execution_profile=None, evaluation_profile=None):
     if evaluation_flex and stage!='evaluate-judge':
         raise ValueError('Flex transport override is restricted to evaluation packets')
     role, tasks, dependencies, log, task_id = _tasks(c, stage, method, budget, seed)
@@ -141,6 +141,14 @@ def export_packet(c, stage, method, budget, seed, destination, *, evaluation_fle
             packet['execution_overrides']=overrides
         packet['settings']=effective
         packet['input_sha256'][str(profile_path)]=digest(profile_path)
+    if evaluation_profile is not None:
+        if role!='evaluation' or execution_profile is not None or evaluation_flex:
+            raise ValueError('Use one explicit evaluation revision, restricted to evaluation')
+        from .evaluation_protocol import profile_evidence
+        evidence=profile_evidence(c,evaluation_profile)
+        packet['evaluation_profile']=evidence
+        packet['settings']=evidence['profile']['judges']['evaluation']
+        packet['input_sha256'][evidence['path']]=evidence['sha256']
     packet["packet_id"] = _hash(packet)
     destination = Path(destination)
     if destination.exists():
@@ -166,6 +174,11 @@ def _load_packet(path):
     if packet.get("request_endpoint", fallback) != expected_endpoint:
         raise ValueError("Judge packet execution endpoint changed")
     _execution_settings(packet['settings'],packet['role'],packet.get('execution_overrides'))
+    if packet.get('evaluation_profile'):
+        from .evaluation_protocol import validate_evidence
+        validate_evidence(packet)
+    elif packet.get('task_subset'):
+        raise ValueError('A task subset requires an explicit evaluation profile')
     return packet
 
 
@@ -191,6 +204,10 @@ def _records(packet, results, *, with_accounting=False):
         legacy = "preference_ab_v1" if packet["role"] == "training" else "preference_ab_tie_v1"
         if result.get("judge_protocol", legacy) != packet.get("judge_protocol", legacy):
             raise ValueError("Judge results use a different prompt protocol")
+        if packet.get('evaluation_profile') and (result.get('backend')!='openai'
+                or result.get('configured_model')!=packet['settings']['model']
+                or result.get('request_endpoint')!=packet['request_endpoint']):
+            raise ValueError('Evaluation results use a different model or endpoint')
         if packet.get("judge_protocol") == "preference_tool_enum_v4":
             calls = result.get("tool_calls") or []
             if (result.get("request_endpoint") != packet.get("request_endpoint")
@@ -257,6 +274,9 @@ def run_packet(packet_path, results, *, execute=False, transport=None, workers=1
     if type(network_retries) is not int or not 0 <= network_retries <= NETWORK_RETRY_LIMIT:
         raise ValueError("Extra network retries must be in 0..2")
     packet = _load_packet(packet_path)
+    if (packet.get('evaluation_profile',{}).get('profile',{}).get('evaluation_role')=='crosscheck'
+            and not packet.get('task_subset')):
+        raise ValueError('The full crosscheck parent is not executable; use the fixed subset')
     if network_retries and not _transport_retry_protocol(packet):
         raise ValueError("Extra transport retries are restricted to checked training protocols")
     tasks, indexed = _records(packet, results)
@@ -343,13 +363,18 @@ def validate_packet(c, packet_path):
             raise ValueError("Judge packet input changed")
     role, tasks, _, _, _ = _tasks(c, packet["stage"], packet["method"], packet["budget"], packet["seed"])
     settings=_execution_settings(judge_settings(c,role),role,packet.get('execution_overrides'))
-    if tasks != packet["tasks"] or settings != packet["settings"]:
+    if packet.get('evaluation_profile'):
+        from .evaluation_protocol import validate_evidence
+        settings=validate_evidence(packet,c,tasks)
+    expected_tasks=[t for t in tasks if int(t['id'].rsplit(':',2)[1]) in packet['task_subset']['indices']] if packet.get('task_subset') else tasks
+    if expected_tasks != packet["tasks"] or settings != packet["settings"]:
         raise ValueError("Judge packet requests do not match the cluster experiment")
-    return packet, tasks
+    return packet, expected_tasks
 
 
 def import_results(c, packet_path, results):
     packet, tasks = validate_packet(c, packet_path)
+    if packet.get('task_subset'):raise ValueError('Secondary results cannot overwrite primary evaluation metrics')
     _, indexed, accounting = _records(packet, results, with_accounting=True)
     by_id = {t["id"]: t for t in tasks}
     recorded = {_call_hash(by_id[tid], by_id[tid]["calls"][a]): r for (tid, a), r in indexed.items()}
@@ -406,11 +431,21 @@ def import_results(c, packet_path, results):
                         raw_api_result_path=str(Path(results).resolve()),**accounting)
         return verify_receipt(marker)
     from .evaluation_v2 import evaluate_judge
-    result=evaluate_judge(*args, judge_factory=factory)
-    if packet.get('execution_overrides'):
+    if packet.get('evaluation_profile'):
+        out=cell(*args);marker=out/'evaluation.receipt.json'
+        if marker.exists():
+            old=verify_receipt(marker)
+            if old.get('evaluation_profile')!=packet['evaluation_profile'] or old.get('effective_judge_settings')!=packet['settings']:
+                raise RuntimeError('Preserve the previous evaluation; do not relabel its metrics under a new Judge')
+        path=out/'evaluation.judge_calls.jsonl'
+        if path.exists() and any(row.get('configured_model')!=packet['settings']['model'] for row in rows(path)):
+            raise RuntimeError('Evaluation call history uses a different Judge; preserve it separately')
+    result=evaluate_judge(*args, judge_factory=factory,settings_override=packet['settings'] if packet.get('evaluation_profile') else None)
+    if packet.get('execution_overrides') or packet.get('evaluation_profile'):
         marker=cell(*args)/'evaluation.receipt.json'
         metadata=verify_receipt(marker)
-        metadata.update(effective_judge_settings=packet['settings'],execution_overrides=packet['execution_overrides'])
+        metadata.update(effective_judge_settings=packet['settings'],execution_overrides=packet.get('execution_overrides'))
+        if packet.get('evaluation_profile'):metadata['evaluation_profile']=packet['evaluation_profile']
         metadata['input_sha256'].update({str(Path(packet_path).resolve()):digest(packet_path),str(Path(results).resolve()):digest(results)})
         dump(marker,metadata)
     return result
@@ -430,6 +465,7 @@ def main():
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--evaluation-flex", action="store_true", help="Bind Flex/900s execution to evaluation packets without changing the frozen study")
     parser.add_argument("--execution-profile", help="Hash-bind the frozen Judge execution profile to an exported packet")
+    parser.add_argument('--evaluation-profile',help='Explicit authorized evaluation revision; original training config is unchanged')
     a = parser.parse_args()
     if a.action == "run":
         if not a.results:
@@ -442,7 +478,7 @@ def main():
         if a.action == "export":
             if any(v is None for v in (a.stage, a.method, a.budget, a.seed)):
                 parser.error("export requires --stage, --method, --budget, --seed")
-            result = export_packet(c, a.stage, a.method, a.budget, a.seed, a.packet,evaluation_flex=a.evaluation_flex,execution_profile=a.execution_profile)
+            result = export_packet(c, a.stage, a.method, a.budget, a.seed, a.packet,evaluation_flex=a.evaluation_flex,execution_profile=a.execution_profile,evaluation_profile=a.evaluation_profile)
         else:
             if not a.results:
                 parser.error("import requires --results")

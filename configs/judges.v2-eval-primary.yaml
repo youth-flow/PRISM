@@ -1,0 +1,60 @@
+kind: prism_v2_eval_profile
+version: 1
+revision: v2-sol-primary-luna-crosscheck-v1
+evaluation_role: primary
+base_evaluation_settings:
+  backend: openai
+  model: gpt-6-luna
+  api: responses
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  reasoning_effort: medium
+  max_output_tokens: 4096
+  max_attempts: 3
+  timeout_seconds: 120
+judges:
+  training:
+    backend: openai
+    model: gpt-6.1-sol
+    api: responses
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    reasoning_effort: high
+    service_tier: flex
+    max_output_tokens: 4096
+    max_attempts: 3
+    timeout_seconds: 900
+  evaluation:
+    backend: openai
+    model: gpt-6.1-sol
+    api: responses
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    reasoning_effort: high
+    max_output_tokens: 4096
+    max_attempts: 3
+    timeout_seconds: 900
+    service_tier: flex
+study_authorization:
+  original_experiment_sha256: 65c883a9e156176e32f4ec210e449865848725ded4d454496edeafa579003af8
+  active_budgets:
+  - 2048
+  - 4096
+  cancelled_budgets:
+  - 8192
+  reason: User cancels V2 8192 and selects Sol high/Flex full primary plus fixed Luna
+    crosscheck before formal evaluation.
+spending_usd:
+  user_total: 54
+  operational_total: 54
+  calibration: 2
+  training: 31
+  evaluation: 21.5
+spending_authorization:
+  kind: prism_v2_evaluation_revision
+  version: 1
+  cancelled_budgets:
+  - 8192
+  reason: User approved new evaluation cap USD21.50; original USD40 cap was replaced
+    by remaining-credit authorization. Original ledger and all unknown fees stay intact;
+    training dispatch remains blocked.

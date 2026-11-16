@@ -1,0 +1,165 @@
+kind: prism_v2_eval_profile
+version: 1
+revision: v2-sol-primary-luna-crosscheck-v1
+evaluation_role: crosscheck
+base_evaluation_settings:
+  backend: openai
+  model: gpt-6-luna
+  api: responses
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  reasoning_effort: medium
+  max_output_tokens: 4096
+  max_attempts: 3
+  timeout_seconds: 120
+judges:
+  training:
+    backend: openai
+    model: gpt-6.1-sol
+    api: responses
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    reasoning_effort: high
+    service_tier: flex
+    max_output_tokens: 4096
+    max_attempts: 3
+    timeout_seconds: 900
+  evaluation:
+    backend: openai
+    model: gpt-6-luna
+    api: responses
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    reasoning_effort: medium
+    max_output_tokens: 4096
+    max_attempts: 3
+    timeout_seconds: 900
+    service_tier: flex
+study_authorization:
+  original_experiment_sha256: 65c883a9e156176e32f4ec210e449865848725ded4d454496edeafa579003af8
+  active_budgets:
+  - 2048
+  - 4096
+  cancelled_budgets:
+  - 8192
+  reason: User cancels V2 8192 and selects Sol high/Flex full primary plus fixed Luna
+    crosscheck before formal evaluation.
+spending_usd:
+  user_total: 54
+  operational_total: 54
+  calibration: 2
+  training: 31
+  evaluation: 21.5
+spending_authorization:
+  kind: prism_v2_evaluation_revision
+  version: 1
+  cancelled_budgets:
+  - 8192
+  reason: User approved new evaluation cap USD21.50; original USD40 cap was replaced
+    by remaining-credit authorization. Original ledger and all unknown fees stay intact;
+    training dispatch remains blocked.
+sample:
+  population: 500
+  count: 100
+  seed: 20261116
+  indices:
+  - 1
+  - 2
+  - 3
+  - 8
+  - 18
+  - 19
+  - 33
+  - 42
+  - 43
+  - 45
+  - 51
+  - 52
+  - 53
+  - 54
+  - 56
+  - 58
+  - 62
+  - 63
+  - 64
+  - 67
+  - 78
+  - 92
+  - 94
+  - 97
+  - 103
+  - 105
+  - 112
+  - 120
+  - 123
+  - 125
+  - 126
+  - 129
+  - 136
+  - 155
+  - 157
+  - 159
+  - 160
+  - 163
+  - 168
+  - 175
+  - 179
+  - 184
+  - 186
+  - 187
+  - 190
+  - 192
+  - 201
+  - 202
+  - 205
+  - 210
+  - 211
+  - 212
+  - 227
+  - 233
+  - 244
+  - 262
+  - 268
+  - 273
+  - 282
+  - 286
+  - 290
+  - 303
+  - 306
+  - 314
+  - 317
+  - 318
+  - 322
+  - 330
+  - 340
+  - 347
+  - 349
+  - 350
+  - 359
+  - 360
+  - 367
+  - 368
+  - 377
+  - 378
+  - 386
+  - 395
+  - 398
+  - 404
+  - 405
+  - 410
+  - 412
+  - 414
+  - 420
+  - 432
+  - 435
+  - 441
+  - 448
+  - 451
+  - 452
+  - 457
+  - 464
+  - 469
+  - 476
+  - 482
+  - 492
+  - 498

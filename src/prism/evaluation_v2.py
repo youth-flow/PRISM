@@ -167,7 +167,9 @@ def _comparison(c, comp, data, complete, budget, seed, index):
             "per_prompt": per_prompt}
 
 
-def evaluate_judge(c, method, budget, seed, *, judge_factory=None):
+def evaluate_judge(c, method, budget, seed, *, judge_factory=None, settings_override=None):
+    if settings_override is not None and judge_factory is None:
+        raise ValueError('Explicit evaluation settings require validated packet replay')
     draws = c["evaluation"].get("bootstrap_samples", 2000)
     if type(draws) is not int or draws < 0:
         raise ValueError("evaluation.bootstrap_samples must be a nonnegative integer")
@@ -192,7 +194,7 @@ def evaluate_judge(c, method, budget, seed, *, judge_factory=None):
             if type(row["label"]) not in (int, float) or row["label"] not in (0, 0.5, 1) or key in complete:
                 raise ValueError("Evaluation log has an invalid or duplicate completed judgment")
             complete[key] = row
-    judge, settings = None, judge_settings(c, "evaluation")
+    judge, settings = None, settings_override or judge_settings(c, "evaluation")
     path.touch(exist_ok=True)
     for comparison_index, comp in owned:
         for i, prompt in enumerate(data):
@@ -270,14 +272,17 @@ def aggregate(c,*,budgets=None,scope_path=None):
     active=list(c['budgets']) if budgets is None else sorted(budgets)
     if not active or len(set(active))!=len(active) or any(type(n) is not int or n not in c['budgets'] for n in active):
         raise ValueError('Aggregation budgets must be a nonempty frozen subset')
-    full=set(active)==set(c['budgets']);scope=None
+    full=set(active)==set(c['budgets']);scope=None;cancelled=[]
     if not full or scope_path is not None:
         if scope_path is None:raise ValueError('A reduced aggregation requires an explicit study scope')
         scope_path=Path(scope_path).resolve();scope=json.loads(scope_path.read_text(encoding='utf-8'))
+        cancelled=scope.get('cancelled_budgets',[])
         if (scope.get('kind')!='prism_study_scope' or scope.get('version')!=1
                 or scope.get('experiment_sha256')!=digest(p/'experiment.json')
                 or scope.get('requested_budgets')!=c['budgets'] or scope.get('active_budgets')!=active
-                or scope.get('deferred_budgets')!=[n for n in c['budgets'] if n not in active]
+                or not isinstance(cancelled,list)
+                or cancelled!=[n for n in c['budgets'] if n not in active and n in cancelled]
+                or scope.get('deferred_budgets')!=[n for n in c['budgets'] if n not in active and n not in cancelled]
                 or not scope.get('reason')):raise ValueError('Study scope does not match the frozen experiment')
     target=p if full else p/'summaries'/('budgets-'+'-'.join(map(str,active)))
     target.mkdir(parents=True,exist_ok=True)
@@ -319,7 +324,8 @@ def aggregate(c,*,budgets=None,scope_path=None):
         sft = json.loads((reference/"metrics.json").read_text(encoding="utf-8"))
     dump(target/"summary.json", {"complete": not missing, "missing_cells": missing, "groups": groups, "sft": sft,
                            'active_budgets':active,'requested_budgets':c['budgets'],
-                           'deferred_budgets':[n for n in c['budgets'] if n not in active],
+                           'deferred_budgets':[n for n in c['budgets'] if n not in active and n not in cancelled],
+                           'cancelled_budgets':cancelled,'authorized_scope_complete':not missing,
                            'full_frozen_matrix_complete':not missing and full,
                            'study_scope':{'path':str(scope_path),'sha256':digest(scope_path)} if scope is not None else None,
                            "training_label_accounting": accounting,
@@ -327,5 +333,5 @@ def aggregate(c,*,budgets=None,scope_path=None):
     dependencies=[target/name for name in ('summary.json','results.csv','comparisons.csv') if (target/name).exists()]+[p/'experiment.json']
     dependencies += [cell(c,r['method'],r['budget'],r['seed'])/'evaluation.receipt.json' for r in records]
     if scope is not None:dependencies.append(scope_path)
-    receipt(target/'aggregation.receipt.json',dependencies,active_budgets=active,full_frozen_matrix_complete=not missing and full)
+    receipt(target/'aggregation.receipt.json',dependencies,active_budgets=active,cancelled_budgets=cancelled,full_frozen_matrix_complete=not missing and full)
     return {"completed": len(records), "missing": len(missing), "output": str(target/"summary.json")}

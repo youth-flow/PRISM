@@ -98,7 +98,13 @@ def _validate_manifest(m):
     if digest(m['profile'])!=m['profile_sha256']:raise ValueError('Judge profile changed')
     profile=yaml.safe_load(Path(m['profile']).read_text(encoding='utf-8'))
     money=profile['spending_usd']
-    if money['user_total']!=40 or money['operational_total']>39:
+    revised=profile.get('spending_authorization',{})
+    if revised:
+        if (revised.get('kind')!='prism_v2_evaluation_revision' or revised.get('version')!=1
+                or not revised.get('reason') or not 0<money['operational_total']<=money['user_total']<=54
+                or money['evaluation']>21.5 or revised.get('cancelled_budgets')!=[8192]):
+            raise ValueError('Invalid authorized V2 evaluation spending revision')
+    elif money['user_total']!=40 or money['operational_total']>39:
         raise ValueError('V2 requires the frozen USD40 user / USD39 operational ceiling')
     workers=m['workers_per_packet']
     if type(workers) is not int or not 1<=workers<=16 or m['max_total_workers']!=32:
@@ -108,6 +114,10 @@ def _validate_manifest(m):
         path=Path(spec['packet']);result=Path(spec['results'])
         if digest(path)!=spec['packet_sha256']:raise ValueError('Judge packet bytes changed')
         p=_load_packet(path)
+        if p.get('evaluation_profile'):
+            if p['evaluation_profile']['profile']!=profile:raise ValueError('Explicit evaluation profile does not match the manifest')
+            if profile['evaluation_role']=='crosscheck' and not p.get('task_subset'):
+                raise ValueError('Only the fixed crosscheck subset may be dispatched')
         if p['packet_id'] in identities or result.resolve() in paths:
             raise ValueError('Duplicate packet or output in one manifest')
         identities.add(p['packet_id']);paths.add(result.resolve());roles.add(p['role'])
@@ -116,6 +126,7 @@ def _validate_manifest(m):
         if result.exists():_records(p,result)
         loaded.append((spec,p))
     if not loaded or len(roles)!=1:raise ValueError('Use one nonempty training or evaluation batch')
+    if revised and roles!={'evaluation'}:raise ValueError('Revised profile is evaluation-only; training remains blocked')
     return profile,loaded
 
 
@@ -130,6 +141,10 @@ def _ledger(m,profile):
     expected={'total':money['operational_total'],**{k:money[k] for k in ('calibration','training','evaluation')}}
     if any(state['limits_usd'].get(k,float('inf'))>v for k,v in expected.items()):
         raise ValueError('Existing live USD ceilings exceed the final profile; explicitly lower/reallocate first')
+    if profile.get('spending_authorization'):
+        with b.transaction() as db:
+            paused=db.execute("SELECT paused FROM purpose_dispatch_control WHERE purpose='training'").fetchone()
+        if not paused or not paused[0]:raise ValueError('Training must remain blocked under the evaluation revision')
     return b
 
 
@@ -274,7 +289,7 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
                    'network_breaker':{'errors':2,'window_seconds':60},
                    'responses_transport':'sse_v1' if stream_responses else 'json',
                    'transport_failures':observed,
-                   'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py')},
+                   'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py','judges.py','evaluation_protocol.py')},
                    'error_type':type(error).__name__ if error else None}
             dump(m['status'],value)
             return value

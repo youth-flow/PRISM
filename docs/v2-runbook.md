@@ -9,13 +9,16 @@
 | 文件 | 职责 |
 |---|---|
 | `configs/experiment.v2.yaml` | 数据/model revision、预算、Design、Reward、PPO与评价定义 |
-| `configs/judges.v2.yaml` | 最终有效Judge执行设置与40/39美元费用约束 |
+| `configs/judges.v2.yaml` | 训练及旧评价执行档，原字节保留 |
+| `configs/judges.v2-eval-primary.yaml` | 用户新授权Sol high/Flex主评、共享评价费用上限 |
+| `configs/judges.v2-eval-crosscheck.yaml` | Luna medium/Flex固定100题交叉、索引与费用绑定 |
 | 仓库外`prism/env.sh` | 当前账号分区、共享存储、SIF哈希；无OpenAI key |
 | 仓库外绝对路径config | 将固定数据/资产指向共享存储，保护immutable release不含数据 |
 
-研究config中的原评价传输档位保持字节，保护已有experiment.json/packet。
-有效profile将评价覆盖为Flex/900秒；只允许这两项执行覆盖，模型、推理强度
-和研究参数不能被profile改掉。导出/导入收据记录实际设置、profile哈希。
+研究config中的原评价设置保持字节，保护已有experiment.json和训练packet。
+用户新授权的显式评价修订允许主评Sol high/Flex/900秒和交叉Luna medium/Flex/900秒，
+其它接口、token cap、三次语义尝试及准则不变。原始响应及导入收据绑定实际模型、
+profile与packet哈希；交叉只执行固定100题子packet，全量父packet禁止执行。
 
 本机查看最终配置和六阶段任务数，无模型加载、无API、无作业：
 
@@ -25,8 +28,10 @@ python -X utf8 -m prism.v2 plan --config configs/experiment.v2.yaml --profile co
 ```
 
 `missing_inputs`明确列出本机没有的集群资产，不能把配置结构通过称为GPU验收。
-最终矩阵为12组Reward/PPO、32768有效训练观察、49152 PPO episodes、18000
-有效评价判断、7033条IFEval生成（含共享SFT），不重复给嵌套预算计费。
+上述plan展示原三档历史合同。当前授权范围由显式study scope限定为2048/4096，
+8192已取消：8组Reward/PPO、16384有效训练观察、32768 PPO episodes、12000
+有效主评及2400交叉判断、4869条IFEval生成（含共享SFT）。已有17507次训练HTTP
+全数计费，额外980个有效标签及未知费用均保留，不按实际使用数删减旧账。
 
 完整容器代码回归使用一次4CPU/6G/15分钟的CPU分配：
 
