@@ -24,7 +24,14 @@ NETWORK_RETRY_LIMIT = 2
 
 def _network_failure(result):
     error = result.get("error") or {}
-    return result.get("label") is None and error.get("retryable") is True and error.get("type") in ("network_error", "http_error")
+    return result.get("label") is None and error.get("retryable") is True and error.get("type") in ("network_error", "response_unavailable", "http_error")
+
+
+def _transport_retry_protocol(packet):
+    return (packet.get('role')=='training' and
+            (packet.get('judge_protocol')=='preference_tool_enum_v4' or
+             (packet.get('judge_protocol')=='preference_ab_v1' and packet['settings']['backend']=='openai'
+              and packet.get('request_endpoint')=='https://api.openai.com/v1/responses')))
 
 
 def _hash(value):
@@ -179,9 +186,13 @@ def _records(packet, results, *, with_accounting=False):
         if ((*key, retransmission) in seen or result.get("seed") != call["seed"] or result.get("flip") != call["flip"]):
             raise ValueError("Duplicate or misaligned Judge result")
         if retransmission:
-            if (packet.get("judge_protocol") != "preference_tool_enum_v4" or attempt != len(task["calls"])-1
+            if (not _transport_retry_protocol(packet) or attempt != len(task["calls"])-1
                     or key not in indexed or retry_counts[key] != retransmission-1 or not _network_failure(indexed[key])):
                 raise ValueError("Transport retries require the same exhausted final request after a network failure")
+            if packet['settings']['backend']=='openai' and (result.get('backend')!='openai'
+                    or result.get('configured_model')!=packet['settings']['model']
+                    or result.get('request_endpoint')!=packet['request_endpoint']):
+                raise ValueError('OpenAI retransmission identity changed')
         elif key in indexed:
             raise ValueError("Duplicate Judge logical attempt")
         label = result.get("label")
@@ -229,8 +240,8 @@ def run_packet(packet_path, results, *, execute=False, transport=None, workers=1
     if type(network_retries) is not int or not 0 <= network_retries <= NETWORK_RETRY_LIMIT:
         raise ValueError("Extra network retries must be in 0..2")
     packet = _load_packet(packet_path)
-    if network_retries and packet.get("judge_protocol") != "preference_tool_enum_v4":
-        raise ValueError("Extra transport retries are restricted to the checked cluster training protocol")
+    if network_retries and not _transport_retry_protocol(packet):
+        raise ValueError("Extra transport retries are restricted to checked training protocols")
     tasks, indexed = _records(packet, results)
     c = {"execution": {"allow_paid_api_calls": True}, "judges": {packet["role"]: packet["settings"]}}
     judge = APIJudge(c, packet["role"], transport=transport)
@@ -366,11 +377,16 @@ def import_results(c, packet_path, results):
                 receipt(archive/"receipt.json", [archive/name for name in ("judge_calls.jsonl", "packet.json", "api.results.jsonl")],
                         reason="native_candidate_alias_or_transport_replay", decoder_revision="native_candidate_alias_v1")
         label(*args, judge_factory=factory)
-        if packet.get("judge_protocol") == "preference_tool_enum_v4":
+        if packet.get("judge_protocol") == "preference_tool_enum_v4" or packet['settings']['backend']=='openai':
             metadata = json.loads(marker.read_text(encoding="utf-8"))
-            metadata.update(accounting, decoder_revision="native_candidate_alias_v1", raw_api_result_path=str(Path(results).resolve()))
+            metadata.update(accounting, raw_api_result_path=str(Path(results).resolve()))
+            if packet.get('judge_protocol')=='preference_tool_enum_v4':metadata['decoder_revision']='native_candidate_alias_v1'
             metadata["input_sha256"].update({str(Path(packet_path).resolve()): digest(packet_path), str(Path(results).resolve()): digest(results)})
             dump(marker, metadata)
+            if c.get('sampling',{}).get('budget_coupling')=='nested_prefix':
+                stream=Path(metadata['source_call_stream'])
+                receipt(stream.parent/'labels.receipt.json',[stream,Path(packet_path).resolve(),Path(results).resolve()],
+                        raw_api_result_path=str(Path(results).resolve()),**accounting)
         return verify_receipt(marker)
     from .evaluation_v2 import evaluate_judge
     result=evaluate_judge(*args, judge_factory=factory)

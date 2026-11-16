@@ -51,6 +51,58 @@ def fake_transport(url, payload, key, timeout):
     return {"choices": [preference_choice()], "usage": {"prompt_tokens": 9, "completion_tokens": 1}}, "test-train"
 
 
+def test_openai_retransmission_is_bounded_and_reuses_final_seed_and_order(tmp_path,monkeypatch):
+    from urllib.error import URLError
+    from prism.local_judge import _records
+    c=config(tmp_path);c['judges']['training']={**c['judges']['evaluation'],'model':'gpt-6.1-sol'}
+    training_fixture(c);packet=tmp_path/'train.packet.json';result=tmp_path/'train.results.jsonl'
+    export_packet(c,'label','prism',8,11,packet);monkeypatch.setenv('OPENAI_API_KEY','LOCAL_TEST_KEY')
+    def outage(*args):raise URLError('lost response')
+    with pytest.raises(RuntimeError,match='exhausted'):
+        run_packet(packet,result,execute=True,transport=outage)
+    prefix=rows(result);assert len(prefix)==3
+    sent=[]
+    def healthy(*args):
+        sent.append(args[1]);return {'status':'completed','output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':'A'}]}]},'recovered'
+    with pytest.raises(RuntimeError,match='exhausted'):
+        run_packet(packet,result,execute=True,transport=healthy)
+    assert not sent
+    run_packet(packet,result,execute=True,transport=healthy,network_retries=2)
+    events=rows(result);assert events[:3]==prefix and len(events)==11
+    extra=events[3]
+    assert extra['attempt']==2 and extra['transport_retry']==1
+    assert (extra['result']['seed'],extra['result']['flip'])==(prefix[2]['result']['seed'],prefix[2]['result']['flip'])
+    from prism.local_judge import _load_packet
+    _,_,accounting=_records(_load_packet(packet),result,with_accounting=True)
+    assert accounting['actual_judge_calls']==11 and accounting['collapsed_transport_calls']==1
+    run_packet(packet,result,execute=True,transport=lambda *args:pytest.fail('No duplicate'),network_retries=2)
+    events[3]['transport_retry']=2;result.write_text(''.join(json.dumps(r)+'\n' for r in events),encoding='utf-8')
+    with pytest.raises(ValueError,match='Transport retries'):_records(_load_packet(packet),result)
+
+
+def test_openai_final_network_slot_never_exceeds_five_http_calls_or_retries_format(tmp_path,monkeypatch):
+    from urllib.error import URLError
+    c=config(tmp_path);c['judges']['training']={**c['judges']['evaluation'],'model':'gpt-6.1-sol'}
+    training_fixture(c);packet=tmp_path/'train.packet.json';export_packet(c,'label','prism',8,11,packet)
+    monkeypatch.setenv('OPENAI_API_KEY','LOCAL_TEST_KEY');sent=[]
+    def outage(*args):sent.append(args[1]);raise URLError('lost response')
+    with pytest.raises(RuntimeError,match='exhausted'):
+        run_packet(packet,tmp_path/'network.jsonl',execute=True,transport=outage,network_retries=2)
+    assert len(sent)==5 and sent[-3:]==[sent[-1]]*3
+    with pytest.raises(RuntimeError,match='exhausted'):
+        run_packet(packet,tmp_path/'network.jsonl',execute=True,transport=outage,network_retries=2)
+    assert len(sent)==5
+    malformed=[]
+    def invalid(*args):
+        malformed.append(True)
+        return {'status':'completed','output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':'C'}]}]},'invalid'
+    with pytest.raises(RuntimeError,match='exhausted'):
+        run_packet(packet,tmp_path/'format.jsonl',execute=True,transport=invalid,network_retries=2)
+    assert len(malformed)==3
+    with pytest.raises(ValueError,match='0..2'):
+        run_packet(packet,tmp_path/'never.jsonl',execute=True,transport=outage,network_retries=3)
+
+
 def test_evaluation_flex_profile_binds_transport_without_changing_study_or_labels(tmp_path,monkeypatch):
     from prism.io import digest
     c=config(tmp_path);save_generations(c)

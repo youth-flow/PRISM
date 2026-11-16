@@ -124,23 +124,84 @@ def materialize(c,profile_path,results_dir):
             _,indexed=_records(packet,result)
             if not all(any(indexed.get((t['id'],a),{}).get('label') is not None for a in range(len(t['calls']))) for t in tasks):
                 raise RuntimeError('Max-budget stream incomplete; no substituted/missing labels allowed')
-            ready.append((method,seed,path,result))
+            ready.append((method,seed,path,result,packet))
     from .pipeline import label
     def no_api(*args):raise AssertionError('Prefix materialization must make no API request')
     dependencies=[Path(profile_path).resolve()]
-    for method,seed,path,result in ready:
+    for method,seed,path,result,packet in ready:
         import_results(c,path,result)
         maximum=rows(cell(c,method,max(c['budgets']),seed)/'labels.jsonl')
+        events=list(packet['prior_calls'])+rows(result)
         for budget in sorted(c['budgets']):
             label(c,method,budget,seed,judge_factory=no_api)
             out=cell(c,method,budget,seed)
             if rows(out/'labels.jsonl')!=maximum[:budget]:raise ValueError('Labels do not match the observation prefix')
+            prefix=[event for event in events if int(event['task_id'])<budget]
+            logical=len({(event['task_id'],event['attempt']) for event in prefix})
+            canonical=len(rows(out/'judge_calls.jsonl'))
+            marker=out/'labels.receipt.json';metadata=verify_receipt(marker)
+            metadata.update(actual_judge_calls=len(prefix),invalid_calls=sum(event['result']['label'] is None for event in prefix),
+                            canonical_judge_calls=canonical,collapsed_transport_calls=len(prefix)-logical,
+                            superseded_semantic_calls=logical-canonical,
+                            max_transport_retry_used=max((event.get('transport_retry',0) for event in prefix),default=0),
+                            raw_api_result_path=str(result.resolve()),source_packet_path=str(path.resolve()))
+            metadata['input_sha256'].update({str(result.resolve()):digest(result),str(path.resolve()):digest(path)})
+            dump(marker,metadata)
             dependencies.append(out/'labels.receipt.json')
+        stream=root(c)/'label_streams'/method/f'seed{seed}'/'judge_calls.jsonl'
+        stream_marker=stream.parent/'labels.receipt.json'
+        receipt(stream_marker,[stream,path,result],raw_api_result_path=str(result.resolve()),actual_judge_calls=len(events))
+        dependencies.append(stream_marker)
         dependencies.extend([path,result])
     summary={'passed':True,'training_valid_observations':plan_summary(c)['training_valid_labels'],'cells':plan_summary(c)['training_cells'],'api_calls_sent':0}
     dump(p/'v2.labels.audit.json',summary)
     receipt(p/'v2.labels.audit.receipt.json',dependencies+[p/'v2.labels.audit.json'])
     return summary
+
+
+def _audit_openai_observations(c,method,budget,seed,labels,metadata):
+    """Independently replay raw binary direction and bounded final-slot retries."""
+    raw_path=Path(metadata['raw_api_result_path']);packet_path=Path(metadata['source_packet_path'])
+    packet=json.loads(packet_path.read_text(encoding='utf-8'));events=list(packet['prior_calls'])+rows(raw_path)
+    if packet['settings']!=judge_settings(c,'training'):raise ValueError('Raw training Judge changed')
+    method_index={'empirical':0,'prism':2}[method]
+    logical={};counts={};selected={};retry_calls=0;raw_calls=0
+    for event in events:
+        draw=int(event['task_id'])
+        if draw>=budget:continue
+        raw_calls+=1;attempt=event['attempt'];retry=event.get('transport_retry',0);value=event['result'];key=(draw,attempt)
+        if type(attempt) is not int or not 0<=attempt<3 or type(retry) is not int or not 0<=retry<=2:
+            raise ValueError('Raw training attempt/retransmission bound changed')
+        if retry:
+            previous=logical.get(key);error=(previous or {}).get('error') or {}
+            if (attempt!=2 or previous is None or previous['label'] is not None or error.get('retryable') is not True
+                    or error.get('type') not in ('network_error','response_unavailable','http_error')
+                    or retry!=counts[key]+1):raise ValueError('Raw final-slot retransmission was not a network failure')
+            retry_calls+=1
+        elif key in logical or attempt!=sum(k[0]==draw for k in logical):
+            raise ValueError('Raw semantic attempts are not a contiguous failure prefix')
+        parts=[seed,method_index,draw,attempt,991]
+        if c['sampling']['budget_coupling']=='independent':parts.insert(1,budget)
+        expected=int(np.random.SeedSequence(parts).generate_state(1)[0]);flip=bool(np.random.default_rng(expected).integers(2))
+        shown={'A':1,'B':0}.get(value['raw'].strip()) if value.get('response_status')=='completed' else None
+        decoded=1-shown if shown is not None and flip else shown
+        if (value['seed']!=expected or value['flip']!=flip or value['label']!=decoded
+                or value.get('backend')!='openai' or value.get('configured_model')!=packet['settings']['model']
+                or value.get('request_endpoint')!='https://api.openai.com/v1/responses'):
+            raise ValueError('Independent raw OpenAI direction/seed/identity mismatch')
+        dispatch=(value.get('budget_transport') or {}).get('dispatch_id')
+        if dispatch is not None and dispatch!=f"{packet['packet_id']}/{draw}/{attempt}/{retry}":
+            raise ValueError('Raw budget dispatch identity changed')
+        if draw in selected:raise ValueError('An original request followed a completed preference')
+        logical[key]=value;counts[key]=retry
+        if decoded is not None:selected[draw]=(attempt,retry,value)
+    if set(selected)!=set(range(budget)) or metadata['actual_judge_calls']!=raw_calls:
+        raise ValueError('Raw training coverage or actual HTTP count changed')
+    for draw,label in enumerate(labels):
+        attempt,retry,value=selected[draw]
+        if label['attempt']!=attempt or label.get('transport_retry',0)!=retry or any(label.get(k)!=value.get(k) for k in ('label','raw','seed','flip','budget_transport')):
+            raise ValueError('Published labels do not select the original raw preference')
+    return {'raw_api_attempts':raw_calls,'transport_retry_calls':retry_calls,'raw_semantic_slots':len(logical)}
 
 
 def audit_reward(c,method,budget,seed):
@@ -149,6 +210,7 @@ def audit_reward(c,method,budget,seed):
     for path in (p/'pool.receipt.json',p/'design.receipt.json',out/'queries.receipt.json',out/'labels.receipt.json',out/'reward.receipt.json'):
         verify_receipt(path)
     queries,labels=rows(out/'queries.jsonl'),rows(out/'labels.jsonl')
+    raw_audit=_audit_openai_observations(c,method,budget,seed,labels,verify_receipt(out/'labels.receipt.json'))
     with np.load(p/'design.npz',allow_pickle=False) as z:
         draws=np.random.default_rng(seed).choice(len(z[method]),size=budget,replace=True,p=z[method]);X=z['v'][draws];index=z['index']
         for k,row in enumerate(queries):
@@ -177,7 +239,7 @@ def audit_reward(c,method,budget,seed):
             or not np.isclose(g,report['gradient_inf'],rtol=1e-6,atol=1e-10)):
         raise RuntimeError('Independent BT loss/gradient audit failed')
     summary={'passed':True,'method':method,'budget':budget,'seed':seed,'bt_loss':loss,'gradient_inf':g,
-             'strong_convexity_objective_gap_bound':float(grad@grad/(2*ridge)) if ridge>0 else None,'audit_api_calls':0}
+             'strong_convexity_objective_gap_bound':float(grad@grad/(2*ridge)) if ridge>0 else None,'audit_api_calls':0,**raw_audit}
     dump(out/'training.audit.json',summary)
     receipt(out/'training.audit.receipt.json',[out/'training.audit.json',out/'reward.receipt.json',out/'labels.receipt.json',out/'queries.receipt.json',p/'design.receipt.json',p/'v2.labels.audit.receipt.json'])
     return summary

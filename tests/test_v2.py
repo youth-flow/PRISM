@@ -81,6 +81,38 @@ def test_partial_max_stream_cannot_publish_any_budget_snapshot(tmp_path,monkeypa
     assert not list(root(c).glob('*/n*/seed*/labels.receipt.json'))
 
 
+def test_retransmitted_labels_keep_raw_http_counts_in_all_prefixes_and_audit(tmp_path,monkeypatch):
+    from urllib.error import URLError
+    from prism.evaluation_v2 import _training_accounting
+    from prism.io import rows,verify_receipt
+    c,profile,data=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
+    for i,spec in enumerate(data['packets']):
+        path=Path(spec['packet']);target=path.with_name(path.name.replace('.packet.json','.results.jsonl'))
+        if i==0:
+            def outage(*args):raise URLError('network failure')
+            with pytest.raises(RuntimeError,match='exhausted'):
+                run_packet(path,target,execute=True,transport=outage,network_retries=1)
+        run_packet(path,target,execute=True,transport=fake,network_retries=2)
+    materialize(c,profile,root(c)/'local_judge_packets')
+    for method in c['methods']:
+        for budget in c['budgets']:
+            for seed in c['seeds']:
+                pipeline.reward(c,method,budget,seed)
+                audited=audit_reward(c,method,budget,seed)
+                extra=4 if method==data['packets'][0]['method'] and seed==data['packets'][0]['seed'] else 0
+                assert audited['raw_api_attempts']==budget+extra
+                assert audited['transport_retry_calls']==(2 if extra else 0)
+    assert _training_accounting(c)['unique_training_calls']==20
+    spec=data['packets'][0];out=cell(c,spec['method'],4,spec['seed'])
+    marker=verify_receipt(out/'labels.receipt.json');path=Path(marker['raw_api_result_path']);events=rows(path)
+    events[4]['result']['flip']=not events[4]['result']['flip']
+    from prism.v2 import _audit_openai_observations
+    from prism.io import write_rows
+    path.write_text(''.join(json.dumps(r)+'\n' for r in events),encoding='utf-8')
+    with pytest.raises(ValueError,match='direction/seed/identity'):
+        _audit_openai_observations(c,spec['method'],4,spec['seed'],rows(out/'labels.jsonl'),marker)
+
+
 def test_private_config_freeze_is_repeatable_and_never_overwrites_other_run(tmp_path):
     from test_config_v2 import fixture_v2
     template,c=fixture_v2(tmp_path)

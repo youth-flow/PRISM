@@ -13,14 +13,14 @@ from pathlib import Path
 import sqlite3
 from threading import Event
 import time
-from urllib.error import URLError
+from urllib.error import HTTPError,URLError
 
 import yaml
 
 from .api_budget import BudgetExceeded, BudgetTransport, DispatchPaused, USDBudget
 from .io import digest, dump, rows
 from .judges import APIJudge
-from .local_judge import _load_packet, _records, run_packet
+from .local_judge import _load_packet, _records, _transport_retry_protocol, NETWORK_RETRY_LIMIT, run_packet
 
 
 @contextmanager
@@ -149,36 +149,43 @@ def _recover(m,loaded,b):
         _,indexed=_records(p,spec['results']);transport=BudgetTransport(b,p['role'],forbidden)
         with b.transaction() as db:
             known_dispatches=dict(db.execute('SELECT id,status FROM dispatch WHERE id LIKE ?',(p['packet_id']+'/%',)).fetchall())
+        def recover_call(task,attempt,retry):
+            nonlocal recovered
+            call=task['calls'][attempt];identity=f"{p['packet_id']}/{task['id']}/{attempt}/{retry}"
+            # No HTTP: only identities already present in the original ledger.
+            env=p['settings']['api_key_env'];before=os.environ.get(env)
+            os.environ[env]='OFFLINE_CACHED_RESPONSE_REPLAY'
+            try:
+                bound=transport.for_call(identity)
+                judge=APIJudge({'execution':{'allow_paid_api_calls':True},'judges':{p['role']:p['settings']}},p['role'],transport=bound)
+                value=judge.call(task['messages'],task['left'],task['right'],call['seed'],call['flip'])
+            finally:
+                if before is None:os.environ.pop(env,None)
+                else:os.environ[env]=before
+            value['budget_transport']=bound.receipt
+            value['recovery']={'offline':True,'reason':'received_response_or_unknown_dispatch_recovered_from_ledger'}
+            if value['label'] is None and (value.get('error') or {}).get('type')=='network_error':
+                value['error']={'type':'response_unavailable','retryable':True};b.uncertain(identity)
+            record={'packet_id':p['packet_id'],'task_id':task['id'],'attempt':attempt,'result':value}
+            if retry:record['transport_retry']=retry
+            target=Path(spec['results']);target.parent.mkdir(parents=True,exist_ok=True)
+            with target.open('a',encoding='utf-8') as stream:
+                stream.write(json.dumps(record,ensure_ascii=False,allow_nan=False)+'\n');stream.flush();os.fsync(stream.fileno())
+            selected={**value,'transport_retry':retry} if retry else value
+            indexed[(task['id'],attempt)]=selected;recovered+=1
+            return selected
         for task in p['tasks']:
-            for attempt,call in enumerate(task['calls']):
+            for attempt in range(len(task['calls'])):
                 previous=indexed.get((task['id'],attempt))
-                if previous is not None:
-                    if previous['label'] is not None:break
-                    continue
-                identity=f"{p['packet_id']}/{task['id']}/{attempt}/0"
-                if identity not in known_dispatches:break
-                # The adapter requires a key variable even for cached replay;
-                # this literal is never sent because the transport forbids HTTP.
-                env=p['settings']['api_key_env'];before=os.environ.get(env)
-                os.environ[env]='OFFLINE_CACHED_RESPONSE_REPLAY'
-                try:
-                    bound=transport.for_call(identity)
-                    judge=APIJudge({'execution':{'allow_paid_api_calls':True},'judges':{p['role']:p['settings']}},p['role'],transport=bound)
-                    value=judge.call(task['messages'],task['left'],task['right'],call['seed'],call['flip'])
-                finally:
-                    if before is None:os.environ.pop(env,None)
-                    else:os.environ[env]=before
-                value['budget_transport']=bound.receipt
-                value['recovery']={'offline':True,'reason':'received_response_or_unknown_dispatch_recovered_from_ledger'}
-                if value['label'] is None and (value.get('error') or {}).get('type')=='network_error':
-                    value['error']={'type':'response_unavailable','retryable':True}
-                    b.uncertain(identity)
-                record={'packet_id':p['packet_id'],'task_id':task['id'],'attempt':attempt,'result':value}
-                target=Path(spec['results']);target.parent.mkdir(parents=True,exist_ok=True)
-                with target.open('a',encoding='utf-8') as stream:
-                    stream.write(json.dumps(record,ensure_ascii=False,allow_nan=False)+'\n');stream.flush();os.fsync(stream.fileno())
-                indexed[(task['id'],attempt)]=value;recovered+=1
-                if value['label'] is not None:break
+                if previous is None:
+                    if f"{p['packet_id']}/{task['id']}/{attempt}/0" not in known_dispatches:break
+                    previous=recover_call(task,attempt,0)
+                if previous['label'] is not None:break
+                if attempt==len(task['calls'])-1 and _transport_retry_protocol(p):
+                    for retry in range(previous.get('transport_retry',0)+1,NETWORK_RETRY_LIMIT+1):
+                        if f"{p['packet_id']}/{task['id']}/{attempt}/{retry}" not in known_dispatches:break
+                        previous=recover_call(task,attempt,retry)
+                        if previous['label'] is not None:break
         _records(p,spec['results'])
     return recovered
 
@@ -191,9 +198,13 @@ def recover_manifest(path):
     return {'recovered_records':count,'http_requests_sent':0,'inspection':inspect_manifest(path)}
 
 
-def run_manifest(path,*,execute=False,transport=None,poll_seconds=20):
+def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_retries=0):
     if not execute:raise RuntimeError('Paid Judge execution requires --execute')
     m,profile,loaded=load_manifest(path);b=_ledger(m,profile)
+    if type(network_retries) is not int or not 0<=network_retries<=NETWORK_RETRY_LIMIT:
+        raise ValueError('Network retransmissions must stay within 0..2')
+    if network_retries and not all(_transport_retry_protocol(p) for _,p in loaded):
+        raise ValueError('Network retransmissions are restricted to checked training packets')
     with owner_lock(str(b.path)+'.worker.lock'):
         if b.state()['paused']:raise DispatchPaused('Ledger is paused; explicitly resume after approval')
         _recover(m,loaded,b)
@@ -208,12 +219,16 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20):
                         if abort.is_set():raise DispatchPaused('Another packet stopped; no new dispatch')
                         attempt=int(identity.split('/')[-2])
                         if attempt:time.sleep(min(20,2**attempt))
+                        if abort.is_set():raise DispatchPaused('Another packet stopped; no new dispatch')
                         try:return inner(url,payload,key,timeout)
-                        except (URLError,TimeoutError,ConnectionError):
-                            # APIJudge records ordinary transport/HTTP failures
-                            # and run_packet uses the remaining frozen attempts.
-                            # A recoverable request must not cancel other packets.
+                        except HTTPError as error:
+                            if error.code!=429 and error.code<500:abort.set()
                             raise
+                        except (URLError,TimeoutError,ConnectionError):
+                            # One missing network response trips the shared
+                            # breaker before more semantic slots are consumed.
+                            # Already admitted HTTP requests still drain/log.
+                            abort.set();raise
                         except BaseException:
                             abort.set();raise
                 return Bound()
@@ -221,6 +236,7 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20):
         def status(state,error=None):
             value={'state':state,'pid':os.getpid(),'timestamp_utc':datetime.now(timezone.utc).isoformat(),
                    'elapsed_seconds':time.monotonic()-started,'packets':_progress(loaded),'ledger':b.state(),
+                   'network_retries_limit':network_retries,
                    'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py')},
                    'error_type':type(error).__name__ if error else None}
             dump(m['status'],value)
@@ -229,7 +245,7 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20):
         try:
             groups=min(len(loaded),m['max_total_workers']//m['workers_per_packet'])
             with ThreadPoolExecutor(max_workers=groups) as executor:
-                futures={executor.submit(run_packet,s['packet'],s['results'],execute=True,transport=managed,workers=m['workers_per_packet']) for s,p in loaded}
+                futures={executor.submit(run_packet,s['packet'],s['results'],execute=True,transport=managed,workers=m['workers_per_packet'],network_retries=network_retries) for s,p in loaded}
                 try:
                     while futures:
                         done,futures=wait(futures,timeout=poll_seconds,return_when=FIRST_COMPLETED)
@@ -243,7 +259,8 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20):
             for spec,p in loaded:
                 _,_,accounting=_records(p,spec['results'],with_accounting=True)
                 dump(Path(spec['results']).with_suffix('.receipt.json'),
-                     {'packet_id':p['packet_id'],'input_sha256':{spec['packet']:digest(spec['packet']),spec['results']:digest(spec['results'])},'accounting':accounting})
+                     {'packet_id':p['packet_id'],'input_sha256':{spec['packet']:digest(spec['packet']),spec['results']:digest(spec['results'])},'accounting':accounting,
+                      'network_retries_limit':network_retries,'code_sha256':final['code_sha256']})
             return final
         except BaseException as error:
             status('paused' if isinstance(error,DispatchPaused) else 'budget_limit' if isinstance(error,BudgetExceeded) else 'failed',error)
@@ -259,7 +276,8 @@ def main():
     state=sub.add_parser('state');state.add_argument('--ledger',required=True)
     for name in ('inspect','recover','run'):
         p=sub.add_parser(name);p.add_argument('--manifest',required=True)
-        if name=='run':p.add_argument('--execute',action='store_true')
+        if name=='run':
+            p.add_argument('--execute',action='store_true');p.add_argument('--network-retries',type=int,default=0)
     for name in ('pause','resume'):
         p=sub.add_parser(name);p.add_argument('--ledger',required=True);p.add_argument('--reason',required=True)
     a=parser.parse_args()
@@ -275,7 +293,7 @@ def main():
         b=USDBudget.open_existing(a.ledger);b.control(a.action=='pause',a.reason);result=b.state()
     elif a.action=='inspect':result=inspect_manifest(a.manifest)
     elif a.action=='recover':result=recover_manifest(a.manifest)
-    else:result=run_manifest(a.manifest,execute=a.execute)
+    else:result=run_manifest(a.manifest,execute=a.execute,network_retries=a.network_retries)
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 
