@@ -4,6 +4,7 @@ Planning, inspection and cached-response recovery make no HTTP requests. Paid
 execution requires both an unpaused ledger and --execute. No key enters a file.
 """
 import argparse
+from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-from threading import Event
+from threading import Event,Lock
 import time
 from urllib.error import HTTPError,URLError
 
@@ -208,7 +209,7 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
     with owner_lock(str(b.path)+'.worker.lock'):
         if b.state()['paused']:raise DispatchPaused('Ledger is paused; explicitly resume after approval')
         _recover(m,loaded,b)
-        abort=Event();started=time.monotonic()
+        abort=Event();started=time.monotonic();network_failures=deque();network_lock=Lock()
         class ManagedTransport(BudgetTransport):
             def for_call(self,identity):
                 inner=super().for_call(identity)
@@ -225,10 +226,15 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
                             if error.code!=429 and error.code<500:abort.set()
                             raise
                         except (URLError,TimeoutError,ConnectionError):
-                            # One missing network response trips the shared
-                            # breaker before more semantic slots are consumed.
+                            # Isolated packet loss uses only the remaining
+                            # original slots. Two losses in 60 seconds trip the
+                            # shared breaker before a burst consumes all slots.
                             # Already admitted HTTP requests still drain/log.
-                            abort.set();raise
+                            with network_lock:
+                                now=time.monotonic();network_failures.append(now)
+                                while network_failures[0]<now-60:network_failures.popleft()
+                                if len(network_failures)>=2:abort.set()
+                            raise
                         except BaseException:
                             abort.set();raise
                 return Bound()
@@ -237,6 +243,7 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
             value={'state':state,'pid':os.getpid(),'timestamp_utc':datetime.now(timezone.utc).isoformat(),
                    'elapsed_seconds':time.monotonic()-started,'packets':_progress(loaded),'ledger':b.state(),
                    'network_retries_limit':network_retries,
+                   'network_breaker':{'errors':2,'window_seconds':60},
                    'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py')},
                    'error_type':type(error).__name__ if error else None}
             dump(m['status'],value)

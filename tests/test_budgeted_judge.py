@@ -116,13 +116,27 @@ def test_network_outage_trips_shared_breaker_and_preserves_resume(tmp_path,monke
         run_manifest(manifest,execute=True,transport=outage,poll_seconds=.01)
     prefix=rows(tmp_path/'train.results.jsonl')
     assert 1<=len(sent)<=4 and len(prefix)==len(sent)
-    assert all(r['attempt']==0 and r['result']['label'] is None for r in prefix)
+    assert len(sent)>=2 and all(r['result']['label'] is None for r in prefix)
+    assert all(r['attempt']<=1 for r in prefix)
     b.control(False,'Network restored; checked resume')
     result=run_manifest(manifest,execute=True,transport=response,poll_seconds=.01)
     assert result['state']=='completed'
     assert rows(tmp_path/'train.results.jsonl')[:len(prefix)]==prefix
     assert b.snapshot()['training']['dispatches']==8+len(sent)
     assert b.snapshot()['training']['unresolved_reservations_usd']>0
+
+
+def test_isolated_packet_loss_keeps_original_semantic_slots_and_does_not_stop_batch(tmp_path,monkeypatch):
+    manifest,b,path=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
+    sent=[]
+    def transient(*args):
+        sent.append(True)
+        if len(sent)==1:raise URLError('one isolated packet loss')
+        return response(*args)
+    result=run_manifest(manifest,execute=True,transport=transient,poll_seconds=.01)
+    assert result['state']=='completed' and len(sent)==9
+    assert result['network_breaker']=={'errors':2,'window_seconds':60}
+    assert not b.state()['paused'] and b.snapshot()['training']['unresolved_reservations_usd']>0
 
 
 def test_cached_final_slot_retransmission_recovers_without_another_request(tmp_path,monkeypatch):
