@@ -27,6 +27,11 @@ def _network_failure(result):
     return result.get("label") is None and error.get("retryable") is True and error.get("type") in ("network_error", "response_unavailable", "http_error")
 
 
+def _openai_response_packet(packet):
+    return (packet.get('role') in ('training','evaluation') and packet['settings']['backend']=='openai'
+            and packet['settings']['api']=='responses' and packet.get('request_endpoint')=='https://api.openai.com/v1/responses')
+
+
 def _transport_retry_protocol(packet):
     return (packet.get('role')=='training' and
             (packet.get('judge_protocol')=='preference_tool_enum_v4' or
@@ -37,9 +42,7 @@ def _transport_retry_protocol(packet):
 def _validate_request_transport(packet,task,call,result):
     evidence=(result.get('budget_transport') or {}).get('request_transport')
     if evidence is None:return
-    if (packet['role']!='training' or packet['settings']['backend']!='openai'
-            or packet['request_endpoint']!='https://api.openai.com/v1/responses'):
-        raise ValueError('Streaming execution is restricted to checked OpenAI training')
+    if not _openai_response_packet(packet):raise ValueError('Streaming execution requires a checked OpenAI Responses packet')
     judge=APIJudge({'judges':{packet['role']:packet['settings']}},packet['role'])
     left,right=(task['right'],task['left']) if call['flip'] else (task['left'],task['right'])
     payload=judge._payload(_messages(task['messages'],left,right,packet['role'],protocol=packet['judge_protocol']))

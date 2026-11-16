@@ -61,6 +61,20 @@ def test_unknown_dispatch_stays_reserved_and_concurrent_ceiling_is_atomic(tmp_pa
         USDBudget(tmp_path/'budget.sqlite',total_usd=2,purposes={'training':2})
 
 
+def test_purpose_pause_blocks_training_but_allows_evaluation_and_existing_replay(tmp_path):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=1,purposes={'training':.8,'evaluation':.2})
+    payload={'model':'gpt-6.1-sol','max_output_tokens':64,'input':[]}
+    b.reserve('already-dispatched','training','gpt-6.1-sol',payload);before=b.snapshot()
+    b.control_purpose('training',True,'User defers largest training budget')
+    assert b.reserve('already-dispatched','training','gpt-6.1-sol',payload) is not None
+    with pytest.raises(DispatchPaused,match='purpose'):
+        b.reserve('forbidden-new','training','gpt-6.1-sol',payload)
+    with pytest.raises(sqlite3.IntegrityError,match='purpose paused'):
+        with b.transaction() as db:db.execute("INSERT INTO dispatch VALUES ('old-worker','training','gpt-6.1-sol','hash',1,NULL,'reserved',NULL,NULL)")
+    assert b.snapshot()==before
+    assert b.reserve('evaluation-allowed','evaluation','gpt-6.1-sol',payload) is None
+
+
 def test_flex_actual_tier_controls_cost_and_inflight_reservations_can_settle(tmp_path):
     b=USDBudget(tmp_path/'budget.sqlite',total_usd=.04,purposes={'training':.04})
     entered,release=Event(),Event()

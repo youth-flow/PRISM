@@ -242,6 +242,17 @@ class USDBudget:
                 WHEN (SELECT paused FROM dispatch_control WHERE id=1)=1 BEGIN
                 SELECT RAISE(ABORT,'API dispatch paused; no HTTP request was sent'); END""")
 
+    def control_purpose(self,purpose,paused,reason):
+        """Block new role-specific calls while retaining all old settlements."""
+        if purpose not in self.limits or purpose=='total' or type(paused) is not bool or not reason.strip():
+            raise ValueError('An existing purpose, explicit state and reason are required')
+        with self.transaction() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS purpose_dispatch_control(purpose TEXT PRIMARY KEY,paused INTEGER NOT NULL,reason TEXT NOT NULL)')
+            db.execute('INSERT OR REPLACE INTO purpose_dispatch_control VALUES (?,?,?)',(purpose,int(paused),reason))
+            db.execute("""CREATE TRIGGER IF NOT EXISTS block_paused_api_purpose BEFORE INSERT ON dispatch
+                WHEN COALESCE((SELECT paused FROM purpose_dispatch_control WHERE purpose=NEW.purpose),0)=1 BEGIN
+                SELECT RAISE(ABORT,'API purpose paused; no HTTP request was sent'); END""")
+
     def state(self):
         with self.transaction() as db:
             limits={k:v/1e6 for k,v in self._effective_limits(db).items()}
@@ -311,6 +322,9 @@ class USDBudget:
                 if prior[:3] != (purpose, model, fingerprint):
                     raise ValueError("A dispatch ID cannot be reused for a different request")
                 return prior
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='purpose_dispatch_control'").fetchone():
+                control=db.execute('SELECT paused FROM purpose_dispatch_control WHERE purpose=?',(purpose,)).fetchone()
+                if control and control[0]:raise DispatchPaused('API purpose is paused; no request was sent')
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatch_control'").fetchone():
                 control=db.execute('SELECT paused FROM dispatch_control WHERE id=1').fetchone()
                 if control and control[0]:raise DispatchPaused('API dispatch is paused; no request was sent')

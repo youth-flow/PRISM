@@ -22,7 +22,7 @@ import yaml
 from .api_budget import BudgetExceeded, BudgetTransport, DispatchPaused, USDBudget
 from .io import digest, dump, rows
 from .judges import APIJudge,_NoRedirect
-from .local_judge import _load_packet, _records, _transport_retry_protocol, NETWORK_RETRY_LIMIT, run_packet
+from .local_judge import _load_packet, _openai_response_packet, _records, _transport_retry_protocol, NETWORK_RETRY_LIMIT, run_packet
 
 
 def _transport_error_metadata(error):
@@ -224,8 +224,8 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
         raise ValueError('Network retransmissions must stay within 0..2')
     if network_retries and not all(_transport_retry_protocol(p) for _,p in loaded):
         raise ValueError('Network retransmissions are restricted to checked training packets')
-    if type(stream_responses) is not bool or (stream_responses and not all(_transport_retry_protocol(p) and p['settings']['backend']=='openai' for _,p in loaded)):
-        raise ValueError('Streaming is restricted to checked OpenAI training packets')
+    if type(stream_responses) is not bool or (stream_responses and not all(_openai_response_packet(p) for _,p in loaded)):
+        raise ValueError('Streaming requires checked OpenAI Responses packets')
     with owner_lock(str(b.path)+'.worker.lock'):
         if b.state()['paused']:raise DispatchPaused('Ledger is paused; explicitly resume after approval')
         _recover(m,loaded,b)
@@ -351,8 +351,8 @@ def supervise_manifest(path,*,execute=False,transport=None,poll_seconds=20,netwo
     if max_network_resumes==0:
         return run_manifest(path,execute=True,transport=transport,poll_seconds=poll_seconds,network_retries=network_retries,stream_responses=stream_responses)
     m,profile,loaded=load_manifest(path);b=_ledger(m,profile)
-    if max_network_resumes and any(p['role']!='training' for _,p in loaded):
-        raise ValueError('Automatic network recovery is restricted to checked training')
+    if max_network_resumes and not all(_openai_response_packet(p) for _,p in loaded):
+        raise ValueError('Automatic network recovery requires checked OpenAI Responses packets')
     def available():
         return _model_healthcheck(loaded[0][1]['settings'])
     healthcheck=healthcheck or available

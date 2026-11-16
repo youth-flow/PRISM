@@ -94,10 +94,11 @@ def evaluate_judge(c, method, budget, seed):
     return result
 
 
-def aggregate(c):
+def aggregate(c,*,budgets=None,scope_path=None):
     if c.get("schema_version") == 2:
         from .evaluation_v2 import aggregate as collect
-        return collect(c)
+        return collect(c,budgets=budgets,scope_path=scope_path)
+    if budgets is not None or scope_path is not None:raise ValueError('Explicit aggregation scope requires schema2')
     import csv
     p = root(c)
     data, missing = [], []

@@ -124,3 +124,31 @@ def test_streamed_observation_import_and_independent_reward_audit(tmp_path,monke
     assert materialize(c,profile,root(c)/'local_judge_packets')['passed']
     pipeline.reward(c,'prism',4,11)
     assert audit_reward(c,'prism',4,11)['passed']
+
+
+def test_luna_streaming_and_batch_resume_keep_three_semantic_slots(tmp_path,monkeypatch):
+    import yaml
+    from prism.budgeted_judge import prepare_manifest,supervise_manifest
+    from prism.local_judge import export_packet
+    from test_evaluation_v2 import config,save_generations
+    c=config(tmp_path);save_generations(c);packet=tmp_path/'evaluation.packet.json'
+    export_packet(c,'evaluate-judge','prism',8,11,packet)
+    money={'user_total':40,'operational_total':39,'calibration':2,'training':35.5,'evaluation':1.8}
+    profile=tmp_path/'judges.yaml';profile.write_text(yaml.safe_dump({'judges':c['judges'],'spending_usd':money}),encoding='utf-8')
+    ledger=tmp_path/'budget.sqlite';b=USDBudget(ledger,total_usd=39,purposes={k:money[k] for k in ('calibration','training','evaluation')})
+    b.control_purpose('training',True,'8192 deferred')
+    manifest=tmp_path/'evaluation.json';prepare_manifest([packet],profile,ledger,manifest,workers=1)
+    monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY');sent=[]
+    def fake(url,payload,key,timeout):
+        sent.append(payload);assert payload['stream'] is True
+        if len(sent)<=2:raise URLError('transient network outage')
+        value,_=response();value['output'][0]['content'][0]['text']='TIE';return value,'luna'
+    with pytest.raises(ValueError,match='training packets'):
+        run_manifest(manifest,execute=True,network_retries=1,transport=lambda *args:pytest.fail('No extra eval slots'))
+    result=supervise_manifest(manifest,execute=True,stream_responses=True,max_network_resumes=2,
+                             transport=fake,poll_seconds=.01,healthcheck=lambda:True,sleeper=lambda _:None)
+    assert result['state']=='completed'
+    data=rows(tmp_path/'evaluation.results.jsonl');assert len(data)==10 and len(sent)==10
+    assert not any(r.get('transport_retry') for r in data)
+    assert all(r['attempt']<=2 for r in data) and sum(r['result']['label']==.5 for r in data)==8
+    assert 'training' not in b.snapshot() and b.snapshot()['evaluation']['dispatches']==10

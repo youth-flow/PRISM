@@ -23,7 +23,10 @@ def main():
     parser.add_argument("--design-solver", choices=["away-fw", "joint-lbfgs"], default="away-fw")
     parser.add_argument("--design-geometry", help="Hash-verified archived design.npz from this run")
     parser.add_argument("--design-warm-start", action="store_true", help="Start joint solve from the archived distribution")
+    parser.add_argument('--active-budgets',type=int,nargs='+',help='Explicit aggregation budget scope; never changes frozen inputs')
+    parser.add_argument('--study-scope',help='Hash-bound user-authorized scope for a reduced aggregation')
     a = parser.parse_args()
+    if (a.active_budgets is not None or a.study_scope) and a.stage!='aggregate':parser.error('Study scope is only valid for aggregate')
     c, missing = load_config(a.config, ready=a.ready or a.stage not in ("validate", "plan", "resource", "api-env-names", "stage-assets", "prepare-data"))
     if a.stage == "validate":
         print(json.dumps({"structural_validation": "passed", "prepared_inputs_present": not missing, "full_input_validation": bool(a.ready), "remaining_choices": missing, "gpu_validation": "not_performed"}, ensure_ascii=False, indent=2))
@@ -59,7 +62,7 @@ def main():
         return
     if a.stage == "aggregate":
         from .evaluation import aggregate
-        print(aggregate(c))
+        print(aggregate(c,budgets=a.active_budgets,scope_path=a.study_scope))
     elif a.stage == "evaluate-reference":
         from .evaluation_v2 import evaluate_reference
         print(evaluate_reference(c))

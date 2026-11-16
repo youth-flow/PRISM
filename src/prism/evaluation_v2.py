@@ -8,7 +8,7 @@ import time
 import numpy as np
 
 from .benchmarks import benchmark_rows, score_benchmark, validate_benchmark_backend
-from .io import cell, dump, fresh, prompt_rows, receipt, root, rows, verify_receipt, write_rows
+from .io import cell, digest, dump, fresh, prompt_rows, receipt, root, rows, verify_receipt, write_rows
 from .judges import evaluation_call_seed, judge_settings, make_judge
 
 
@@ -265,10 +265,24 @@ def _training_accounting(c):
             "unique_valid_observations": observations}
 
 
-def aggregate(c):
+def aggregate(c,*,budgets=None,scope_path=None):
     p, records, missing = root(c), [], []
+    active=list(c['budgets']) if budgets is None else sorted(budgets)
+    if not active or len(set(active))!=len(active) or any(type(n) is not int or n not in c['budgets'] for n in active):
+        raise ValueError('Aggregation budgets must be a nonempty frozen subset')
+    full=set(active)==set(c['budgets']);scope=None
+    if not full or scope_path is not None:
+        if scope_path is None:raise ValueError('A reduced aggregation requires an explicit study scope')
+        scope_path=Path(scope_path).resolve();scope=json.loads(scope_path.read_text(encoding='utf-8'))
+        if (scope.get('kind')!='prism_study_scope' or scope.get('version')!=1
+                or scope.get('experiment_sha256')!=digest(p/'experiment.json')
+                or scope.get('requested_budgets')!=c['budgets'] or scope.get('active_budgets')!=active
+                or scope.get('deferred_budgets')!=[n for n in c['budgets'] if n not in active]
+                or not scope.get('reason')):raise ValueError('Study scope does not match the frozen experiment')
+    target=p if full else p/'summaries'/('budgets-'+'-'.join(map(str,active)))
+    target.mkdir(parents=True,exist_ok=True)
     for method in c["methods"]:
-        for budget in c["budgets"]:
+        for budget in active:
             for seed in c["seeds"]:
                 out = cell(c, method, budget, seed)
                 if not (out/"evaluation.receipt.json").exists():
@@ -282,11 +296,11 @@ def aggregate(c):
     comparisons = [{"owner": r["method"], "budget": r["budget"], "seed": r["seed"], **{k: v for k, v in comp.items() if k not in ("per_prompt", "ci95")},
                     "ci95_lower": comp["ci95"][0] if comp["ci95"] else None, "ci95_upper": comp["ci95"][1] if comp["ci95"] else None}
                    for r in records for comp in r["comparisons"]]
-    _csv(p/"results.csv", scalar)
-    _csv(p/"comparisons.csv", comparisons)
+    _csv(target/"results.csv", scalar)
+    _csv(target/"comparisons.csv", comparisons)
     groups = []
     for method in c["methods"]:
-        for budget in c["budgets"]:
+        for budget in active:
             group = [r for r in records if r["method"] == method and r["budget"] == budget]
             if group:
                 result = {"method": method, "budget": budget, "completed_seeds": len(group)}
@@ -295,7 +309,7 @@ def aggregate(c):
                     result[key+"_mean"] = float(np.mean(values)) if values else None
                     result[key+"_seed_std"] = float(np.std(values, ddof=1)) if len(values) > 1 else None
                 groups.append(result)
-    evaluation_logs = [rows(path) for method in c["methods"] for budget in c["budgets"] for seed in c["seeds"]
+    evaluation_logs = [rows(path) for method in c["methods"] for budget in active for seed in c["seeds"]
                        if (path := cell(c, method, budget, seed)/"evaluation.judge_calls.jsonl").exists()]
     accounting = {**_training_accounting(c), "evaluation_judge_calls": sum(map(len, evaluation_logs))}
     reference = _reference(c)
@@ -303,7 +317,15 @@ def aggregate(c):
     if (reference/"reference.receipt.json").exists():
         verify_receipt(reference/"reference.receipt.json")
         sft = json.loads((reference/"metrics.json").read_text(encoding="utf-8"))
-    dump(p/"summary.json", {"complete": not missing, "missing_cells": missing, "groups": groups, "sft": sft,
+    dump(target/"summary.json", {"complete": not missing, "missing_cells": missing, "groups": groups, "sft": sft,
+                           'active_budgets':active,'requested_budgets':c['budgets'],
+                           'deferred_budgets':[n for n in c['budgets'] if n not in active],
+                           'full_frozen_matrix_complete':not missing and full,
+                           'study_scope':{'path':str(scope_path),'sha256':digest(scope_path)} if scope is not None else None,
                            "training_label_accounting": accounting,
                            "note": "AB/BA is averaged within each prompt before uncertainty estimation. Training-seed variability is separate; finite-sample MC KL may be negative."})
-    return {"completed": len(records), "missing": len(missing), "output": str(p/"summary.json")}
+    dependencies=[target/name for name in ('summary.json','results.csv','comparisons.csv') if (target/name).exists()]+[p/'experiment.json']
+    dependencies += [cell(c,r['method'],r['budget'],r['seed'])/'evaluation.receipt.json' for r in records]
+    if scope is not None:dependencies.append(scope_path)
+    receipt(target/'aggregation.receipt.json',dependencies,active_budgets=active,full_frozen_matrix_complete=not missing and full)
+    return {"completed": len(records), "missing": len(missing), "output": str(target/"summary.json")}

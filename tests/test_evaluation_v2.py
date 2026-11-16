@@ -75,6 +75,28 @@ class CountingJudge:
                 "usage": {"input_tokens": 5, "output_tokens": 1}, "request_id": str(len(self.calls)), "error": None}
 
 
+def test_explicit_budget_scope_completes_only_authorized_cells_without_changing_config(tmp_path,monkeypatch):
+    from prism.io import digest
+    c=config(tmp_path);c['budgets']=[4,8];save_generations(c);install_judge(monkeypatch,fail_first=False)
+    frozen=digest(root(c)/'experiment.json')
+    for method in c['methods']:
+        for seed in c['seeds']:evaluation.evaluate_judge(c,method,4,seed)
+    assert evaluation.aggregate(c)['missing']==4
+    with pytest.raises(ValueError,match='explicit study scope'):evaluation.aggregate(c,budgets=[4])
+    scope=tmp_path/'scope.json'
+    data={'kind':'prism_study_scope','version':1,'experiment_sha256':frozen,'requested_budgets':[4,8],
+          'active_budgets':[4],'deferred_budgets':[8],'reason':'User defers larger budget'}
+    dump(scope,data);result=evaluation.aggregate(c,budgets=[4],scope_path=scope)
+    assert result['completed']==4 and result['missing']==0
+    target=Path(result['output']);summary=json.loads(target.read_text('utf-8'))
+    assert summary['complete'] and not summary['full_frozen_matrix_complete']
+    assert summary['active_budgets']==[4] and summary['deferred_budgets']==[8]
+    assert target.parent!=root(c) and not json.loads((root(c)/'summary.json').read_text('utf-8'))['complete']
+    verify_receipt(target.parent/'aggregation.receipt.json');assert digest(root(c)/'experiment.json')==frozen
+    data['experiment_sha256']='0'*64;dump(scope,data)
+    with pytest.raises(ValueError,match='scope does not match'):evaluation.aggregate(c,budgets=[4],scope_path=scope)
+
+
 def install_judge(monkeypatch, *, fail_first=True, position_only=False):
     judge = CountingJudge()
     judge.calls, judge.fail_first, judge.position_only = [], fail_first, position_only
