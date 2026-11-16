@@ -85,6 +85,15 @@ def test_partial_or_changed_shard_cannot_publish_full_generation(tmp_path,monkey
     assert not (out/'evaluation.responses.jsonl').exists()
 
 
+def test_dependency_path_aliases_follow_existing_receipt_contract(tmp_path,monkeypatch):
+    c,out=prepared(tmp_path);fake_model(monkeypatch)
+    alias=root(c)/'reference-alias';alias.mkdir()
+    monkeypatch.setattr(shards,'_reference',lambda c:alias/'..'/'reference')
+    for index in range(2):shards.generate(c,'prism',8,11,index,2)
+    shards.merge(c,'prism',8,11,2)
+    verify_receipt(out/'evaluation.generate.receipt.json')
+
+
 @pytest.mark.parametrize('change',['coverage','seed','order','policy'])
 def test_rehashed_contract_or_order_changes_are_rejected(tmp_path,monkeypatch,change):
     c,out=prepared(tmp_path);fake_model(monkeypatch)

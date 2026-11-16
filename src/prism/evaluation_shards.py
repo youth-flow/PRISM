@@ -95,7 +95,9 @@ def merge(c,method,budget,seed,parts):
     artifacts=[out/name for name in ('evaluation.responses.jsonl','benchmark.responses.jsonl','benchmark.metrics.json')]
     done=out/'evaluation.generate.receipt.json';fresh(*artifacts,done)
     assembled={name:[] for name in data}
-    fixed_hashes={str(path.resolve()):digest(path) for path in deps+[Path(__file__)]}
+    # io.receipt keys preserve the supplied path, including legitimate aliases.
+    # verify_receipt already checks the bytes reached through each path.
+    fixed_hashes={str(path):digest(path) for path in deps+[Path(__file__)]}
     expected_settings={'evaluation_cap':c['evaluation']['max_new_tokens'],'evaluation_temperature':1.0,
                        'benchmark_cap':c['benchmark']['max_new_tokens'],'benchmark_temperature':c['benchmark']['temperature'],
                        'benchmark_prompt_limit':_benchmark_prompt_limit(c)}
