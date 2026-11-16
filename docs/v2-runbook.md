@@ -103,6 +103,10 @@ python -X utf8 -m prism.budgeted_judge inspect --manifest local/v2-training.json
 历史消费的新实验，会拒绝覆盖文件并默认暂停；当前不调用它。profile额度与
 历史账本合同不同不意味着重建账本，实时约束必须仍在39美元内。
 
+当前这份已标注run已经生成并离线核对的manifest是
+`local/v2-review/training.manifest.json`，指向原四份packet、原JSONL和原账本。
+继续该run时使用它，不另行复制一套packet ID或创建新费用账本。
+
 停止/离线恢复命令：
 
 ```powershell

@@ -32,6 +32,7 @@ Flex/900秒，原experiment.json和已标注packet保持不变。V1原配置为
 
 - [完整执行顺序、冻结配置、导入/恢复](docs/v2-runbook.md)
 - [计算资源正确高效使用、资源档位、Slurm、计费](docs/v2-compute.md)
+- [工程验收与当前暂停状态](docs/v2-readiness.md)
 - [最终冻结说明及实测Judge费用](docs/v2-frozen.md)
 - [概率数值协议](docs/numerical-protocol.md)、[PPO参数依据](docs/ppo-parameter-pilot.md)
 - [数学定义](docs/protocol.md)、[算法审计](ALGORITHM_REVIEW.md)
