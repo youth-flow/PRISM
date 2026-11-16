@@ -151,6 +151,62 @@ def test_transport_diagnostics_preserve_ssl_codes_without_exception_text():
     assert 'SECRET_KEY' not in json.dumps(value) and 'must never' not in json.dumps(value)
 
 
+def test_bounded_network_supervision_resumes_without_new_slots_or_duplicate_successes(tmp_path,monkeypatch):
+    from threading import Lock
+    from prism.budgeted_judge import supervise_manifest
+    manifest,b,path=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
+    lock=Lock();sent=[];checks=[];waits=[]
+    def transient(*args):
+        with lock:sent.append(True);fail=len(sent)<=2
+        if fail:raise URLError('transient disconnect')
+        return response(*args)
+    def healthy():checks.append(True);return True
+    result=supervise_manifest(manifest,execute=True,transport=transient,poll_seconds=.01,network_retries=2,
+                             max_network_resumes=2,healthcheck=healthy,sleeper=waits.append)
+    assert result['state']=='completed' and len(sent)==10 and checks==[True] and waits==[30]
+    events=rows(tmp_path/'train.results.jsonl')
+    assert len(events)==10 and len({r['task_id'] for r in events if r['result']['label'] is not None})==8
+    assert not any(r.get('transport_retry') for r in events)
+    assert b.snapshot()['training']['dispatches']==10 and b.snapshot()['training']['unresolved_reservations_usd']>0
+    assert len(list((tmp_path/'network_pause_history').glob('*.json')))==1
+
+
+def test_supervision_does_not_resume_user_pause_or_exhausted_formats(tmp_path,monkeypatch):
+    from prism.budgeted_judge import supervise_manifest,_resume_own_network_pause
+    manifest,b,path=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
+    b.control(True,'User pauses work')
+    with pytest.raises(DispatchPaused):_resume_own_network_pause(b)
+    with pytest.raises(DispatchPaused):
+        supervise_manifest(manifest,execute=True,max_network_resumes=2,healthcheck=lambda:pytest.fail('No probe'),transport=lambda *args:pytest.fail('No HTTP'))
+    assert b.state()['pause_reason']=='User pauses work'
+    b.control(False,'Start fake formats');calls=[]
+    def malformed(*args):
+        calls.append(True);value,rid=response(*args);value['output'][0]['content'][0]['text']='C';return value,rid
+    # A single worker makes the exact exhausted semantic prefix observable.
+    data=json.loads(manifest.read_text('utf-8'));data['workers_per_packet']=1;manifest.write_text(json.dumps(data),encoding='utf-8')
+    with pytest.raises(RuntimeError,match='exhausted'):
+        supervise_manifest(manifest,execute=True,max_network_resumes=2,healthcheck=lambda:pytest.fail('No format retry'),transport=malformed)
+    assert len(calls)==3
+
+
+def test_supervision_health_failure_keeps_all_costs_and_pause(tmp_path,monkeypatch):
+    from prism.budgeted_judge import supervise_manifest
+    manifest,b,path=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
+    def outage(*args):raise URLError('offline')
+    with pytest.raises(DispatchPaused,match='health check'):
+        supervise_manifest(manifest,execute=True,max_network_resumes=2,transport=outage,healthcheck=lambda:False,sleeper=lambda _:None)
+    assert b.state()['paused'] and b.snapshot()['training']['unresolved_reservations_usd']>0
+
+
+@pytest.mark.parametrize('failure',[{'exception_type':'BudgetExceeded'}, {'exception_type':'HTTPError','http_status':401}, {'exception_type':'ValueError'}])
+def test_network_recovery_never_accepts_budget_auth_or_internal_failure(failure):
+    import os
+    from prism.budgeted_judge import _only_network_pause,_WORKER_PAUSE_REASON
+    status={'state':'paused','error_type':'DispatchPaused','pid':os.getpid(),
+            'transport_failures':[{'exception_type':'RemoteDisconnected'},failure]}
+    assert not _only_network_pause(status,{'paused':True,'pause_reason':_WORKER_PAUSE_REASON})
+
+
 def test_cached_final_slot_retransmission_recovers_without_another_request(tmp_path,monkeypatch):
     from prism.local_judge import run_packet
     manifest,b,path=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')

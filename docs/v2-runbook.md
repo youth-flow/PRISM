@@ -108,6 +108,15 @@ python -X utf8 -m prism.budgeted_judge inspect --manifest local/v2-training.json
 `local/v2-review/training.manifest.json`，指向原四份packet、原JSONL和原账本。
 继续该run时使用它，不另行复制一套packet ID或创建新费用账本。
 
+若代理高并发不稳定，可保留原manifest，并使用只降低workers的执行副本；
+packet/结果/账本/profile和status路径保持相同，必须先确认原worker已退出并核对。
+本次执行副本`training.workers4.manifest.json`为每流4、总16并发。受限恢复可单次传
+`-NetworkRetries 2 -MaxNetworkResumes 6`，两项默认均0。后者仅编排执行器自身
+网络暂停后的离线核对、30秒退避和无推理费用GET健康检查，不增加每题原3语义
+槽位或最后网络重传最多2次。SQL条件恢复保护显式用户暂停；预算、鉴权、格式或
+最终槽位耗尽、内部故障、健康检查失败均停止。旧停止状态保存在manifest同目录
+`network_pause_history/`，原始失败调用和未知费用全部保留，不得通过重启清除。
+
 停止/离线恢复命令：
 
 ```powershell

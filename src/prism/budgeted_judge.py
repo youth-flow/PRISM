@@ -15,6 +15,7 @@ import sqlite3
 from threading import Event,Lock
 import time
 from urllib.error import HTTPError,URLError
+from urllib.request import Request,build_opener
 
 import yaml
 
@@ -300,6 +301,76 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
             raise
 
 
+_WORKER_PAUSE_REASON='Worker stopped; inspect saved results before resuming'
+
+
+def _only_network_pause(status,budget_state):
+    failures=status.get('transport_failures') or []
+    network={'URLError','TimeoutError','ConnectionError','ConnectionResetError','RemoteDisconnected','SSLError','SSLEOFError'}
+    recoverable=lambda value: (value.get('exception_type') in network or
+        (value.get('exception_type')=='HTTPError' and (value.get('http_status')==429 or value.get('http_status',0)>=500)))
+    return (status.get('state')=='paused' and status.get('error_type')=='DispatchPaused'
+            and status.get('pid')==os.getpid() and budget_state['paused']
+            and budget_state['pause_reason']==_WORKER_PAUSE_REASON
+            and any(f.get('exception_type') in network for f in failures)
+            and all(recoverable(f) for f in failures))
+
+
+def _resume_own_network_pause(budget):
+    # Atomic compare-and-set: never overwrite a user/operator pause racing with
+    # the health check. Existing budget triggers and all costs stay unchanged.
+    with budget.transaction() as db:
+        cursor=db.execute('UPDATE dispatch_control SET paused=0,reason=? WHERE id=1 AND paused=1 AND reason=?',
+                          ('Checked bounded network recovery; original attempts and caps retained',_WORKER_PAUSE_REASON))
+        if cursor.rowcount!=1:raise DispatchPaused('Explicit pause changed; no automatic resume')
+        db.execute('INSERT INTO admission_events(action,reason) VALUES (?,?)',
+                   ('resume','Checked bounded network recovery; original attempts and caps retained'))
+
+
+def supervise_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_retries=0,max_network_resumes=0,healthcheck=None,sleeper=time.sleep):
+    """Bounded orchestration only; run_packet still enforces every original slot.
+
+    No restart on budget stops, authentication, exhausted semantic/transport
+    slots, internal errors or explicit pauses. Every stopped status is archived.
+    """
+    if not execute:raise RuntimeError('Paid Judge execution requires --execute')
+    if type(max_network_resumes) is not int or not 0<=max_network_resumes<=8:
+        raise ValueError('Network resumes must stay within 0..8')
+    if max_network_resumes==0:
+        return run_manifest(path,execute=True,transport=transport,poll_seconds=poll_seconds,network_retries=network_retries)
+    m,profile,loaded=load_manifest(path);b=_ledger(m,profile)
+    if max_network_resumes and any(p['role']!='training' for _,p in loaded):
+        raise ValueError('Automatic network recovery is restricted to checked training')
+    def available():
+        settings=loaded[0][1]['settings'];key=os.environ.get(settings['api_key_env'])
+        if not key:return False
+        try:
+            with build_opener().open(Request('https://api.openai.com/v1/models',headers={'Authorization':'Bearer '+key}),timeout=15) as response:
+                return response.status==200
+        except (OSError,HTTPError,URLError):return False
+    healthcheck=healthcheck or available
+    for resumed in range(max_network_resumes+1):
+        try:
+            return run_manifest(path,execute=True,transport=transport,poll_seconds=poll_seconds,network_retries=network_retries)
+        except DispatchPaused:
+            if resumed==max_network_resumes:raise
+            if b.state()['pause_reason']!=_WORKER_PAUSE_REASON or not Path(m['status']).exists():raise
+            status=json.loads(Path(m['status']).read_text(encoding='utf-8'))
+            if not _only_network_pause(status,b.state()):raise
+            archive=Path(m['status']).parent/'network_pause_history'
+            archive.mkdir(exist_ok=True)
+            target=archive/(datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')+'.json')
+            dump(target,{'stopped_status':status,'manifest_sha256':digest(path),'next_network_resume':resumed+1,
+                         'max_network_resumes':max_network_resumes,'new_semantic_slots':0,'http_requests_sent_by_recovery':0})
+            repair=recover_manifest(path)
+            if any(r['cached_missing_jsonl'] or r['unresolved_missing_jsonl'] for r in repair['inspection']['recovery']):raise
+            sleeper(30)
+            if not healthcheck():raise DispatchPaused('Network health check failed; ledger stays paused') from None
+            _resume_own_network_pause(b)
+            print(json.dumps({'network_resume':resumed+1,'original_request_limits_unchanged':True,
+                              'archived_status':str(target),'offline_recovery_records':repair['recovered_records']}),flush=True)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='action',required=True)
     prepare=sub.add_parser('prepare');prepare.add_argument('--packet',action='append',required=True)
@@ -311,6 +382,7 @@ def main():
         p=sub.add_parser(name);p.add_argument('--manifest',required=True)
         if name=='run':
             p.add_argument('--execute',action='store_true');p.add_argument('--network-retries',type=int,default=0)
+            p.add_argument('--max-network-resumes',type=int,default=0)
     for name in ('pause','resume'):
         p=sub.add_parser(name);p.add_argument('--ledger',required=True);p.add_argument('--reason',required=True)
     a=parser.parse_args()
@@ -326,7 +398,7 @@ def main():
         b=USDBudget.open_existing(a.ledger);b.control(a.action=='pause',a.reason);result=b.state()
     elif a.action=='inspect':result=inspect_manifest(a.manifest)
     elif a.action=='recover':result=recover_manifest(a.manifest)
-    else:result=run_manifest(a.manifest,execute=a.execute,network_retries=a.network_retries)
+    else:result=supervise_manifest(a.manifest,execute=a.execute,network_retries=a.network_retries,max_network_resumes=a.max_network_resumes)
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 
