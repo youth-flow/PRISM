@@ -79,7 +79,7 @@ def test_fp32_ppo_preserves_upstream_optimization_ast():
         def visit_Delete(self, node):
             return None if ast.unparse(node) == "del logitss" else self.generic_visit(node)
         def visit_Expr(self, node):
-            if isinstance(node.value,ast.Call) and ast.unparse(node.value.func) == "self.check_probability_paths": return None
+            if isinstance(node.value,ast.Call) and ast.unparse(node.value.func) in ("self.check_probability_paths", "self.check_optimizer_steps"): return None
             return self.generic_visit(node)
         def visit_Call(self, node):
             name = ast.unparse(node.func)
@@ -128,3 +128,26 @@ def test_fp32_protocol_real_olmo_ppo_passes_guards_and_updates_lora(tmp_path, cr
         assert validate_policy_report(config,result)['actual_adamw_steps']==2
     actor = PeftModel.from_pretrained(base,tmp_path/"policy")
     assert any(p.detach().abs().sum()>0 for n,p in actor.named_parameters() if "lora_B" in n)
+
+
+def test_real_ppo_accumulates_across_repeated_prompt_loader_exhaustion(tmp_path):
+    pytest.importorskip('trl')
+    from test_prism_model_contract import tiny_olmo2
+    from prism.hf import train_ppo
+    from prism.v2_audit import validate_policy_report
+    import numpy as np
+    path=tmp_path/'tiny';tiny_olmo2(path)
+    config={'choices':{'sft':{'model':str(path),'revision':'0'*40}},
+            'runtime':{'device':'cpu','dtype':'float32','local_files_only':True,'numerics':'fp32_consistent_v1'},
+            'candidate':{'max_prompt_tokens':20},
+            'ppo':{'total_episodes':16,'response_length':4,'learning_rate':.001,'critic_learning_rate':.003,
+                   'per_device_train_batch_size':1,'gradient_accumulation_steps':2,'num_mini_batches':2,
+                   'num_ppo_epochs':2,'kl_coef':.05,'cliprange':.2,'vf_coef':.1,'lora_r':2,
+                   'lora_alpha':4,'lora_target_modules':'all-linear'}}
+    prompts=[{'messages':[{'role':'user','content':'hello world'}]}]*8
+    report=train_ppo(config,tmp_path/'policy',np.linspace(-.1,.1,32),prompts,5)
+    assert [r['expected_steps'] for r in report['optimizer_checks']]==[4,8,12,16]
+    assert validate_policy_report(config,report)['actual_adamw_steps']==16
+    broken=deepcopy(report);broken['optimizer_checks'][1]['actual']['actor']['step_max']=9
+    with pytest.raises(ValueError,match='Per-rollout actual'):
+        validate_policy_report(config,broken)

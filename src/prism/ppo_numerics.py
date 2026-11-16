@@ -42,10 +42,13 @@ class FP32PPOTrainer(PPOTrainer):
         self.critic_learning_rate = critic_learning_rate
         self.optimizer_group_report = None
         super().__init__(*args, **kwargs)
+        from .ppo_optim import configure_rollout_accumulation
+        configure_rollout_accumulation(self.accelerator)
         if self.args.bf16 or self.args.fp16 or torch.backends.cuda.matmul.allow_tf32:
             raise ValueError("FP32 PPO requires disabled mixed precision and TF32")
         require_fp32_model(self.model)
         self.probability_checks = []
+        self.optimizer_checks = []
 
     def create_optimizer(self):
         optimizer = super().create_optimizer()
@@ -54,6 +57,20 @@ class FP32PPOTrainer(PPOTrainer):
             self.optimizer_group_report = separate_critic_learning_rate(
                 self.optimizer, self.model, self.critic_learning_rate)
         return optimizer
+
+    @torch.no_grad()
+    def check_optimizer_steps(self, update):
+        if self.optimizer_group_report is None:
+            return
+        from .ppo_optim import optimizer_step_report
+        actual = optimizer_step_report(self.optimizer)
+        expected = update*self.args.num_ppo_epochs*self.args.num_mini_batches
+        check = {'rollout_update': update, 'expected_steps': expected, 'actual': actual,
+                 'sync_with_dataloader': self.accelerator.gradient_state.sync_with_dataloader}
+        print('optimizer_check '+str(check), flush=True)
+        self.optimizer_checks.append(check)
+        if check['sync_with_dataloader'] or any(v['step_min']!=expected or v['step_max']!=expected for v in actual.values()):
+            raise RuntimeError('PPO accumulated AdamW steps mismatch at rollout boundary')
 
     @torch.no_grad()
     def check_probability_paths(self, query_responses, responses, old, reference, padding_mask, context_length, update):
@@ -350,6 +367,7 @@ class FP32PPOTrainer(PPOTrainer):
                     )
                     # fmt: on
                     torch.cuda.empty_cache()
+            self.check_optimizer_steps(update)
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()

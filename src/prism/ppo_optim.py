@@ -2,6 +2,13 @@
 import math
 
 
+def configure_rollout_accumulation(accelerator):
+    """PPO microbatches, rather than prompt-loader boundaries, define updates."""
+    accelerator.gradient_state.plugin_kwargs['sync_with_dataloader'] = False
+    if accelerator.gradient_state.sync_with_dataloader:
+        raise RuntimeError('PPO gradient accumulation must ignore prompt-loader exhaustion')
+
+
 def optimizer_step_report(optimizer):
     """Read real AdamW state counters after training; do not alter the loop."""
     result={}

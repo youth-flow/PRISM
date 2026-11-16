@@ -14,6 +14,37 @@ def test_step_report_reads_actual_adamw_state_counters_for_both_roles():
     assert report=={role:{'tensor_count':1,'step_min':5,'step_max':5} for role in ('actor','critic')}
 
 
+def test_production_prompt_boundaries_preserve_256_real_adamw_updates():
+    from accelerate import Accelerator
+    from torch.utils.data import DataLoader,TensorDataset
+    from prism.ppo_optim import configure_rollout_accumulation
+    def measured(fixed):
+        model=nn.Linear(1,1)
+        optimizer=torch.optim.AdamW(model.parameters(),lr=1e-5)
+        acc=Accelerator(cpu=True,gradient_accumulation_steps=16)
+        acc.gradient_state.plugin_kwargs['sync_with_dataloader']=True
+        if fixed:configure_rollout_accumulation(acc)
+        loader=DataLoader(TensorDataset(torch.ones(2000,1)),batch_size=64,drop_last=True)
+        model,optimizer,loader=acc.prepare(model,optimizer,loader)
+        def repeated():
+            while True:yield from loader
+        iterator=iter(repeated());counts=[];last=0
+        try:
+            for update in range(64):
+                batch=next(iterator)[0]
+                for _ in range(64):
+                    with acc.accumulate(model):
+                        acc.backward(model(batch[:2]).square().mean())
+                        optimizer.step();optimizer.zero_grad()
+                actual=max(int(v['step'].item()) for v in optimizer.state.values())
+                counts.append(actual-last);last=actual
+        finally:iterator.close()
+        return counts
+    old=measured(False)
+    assert sum(old)==376 and [(i+1,n) for i,n in enumerate(old) if n!=4]==[(31,64),(62,64)]
+    assert measured(True)==[4]*64
+
+
 def test_separate_rates_preserve_decay_coverage_and_scheduler_ratio():
     model = nn.Module()
     model.policy = nn.Module()

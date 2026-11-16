@@ -20,6 +20,18 @@ def validate_policy_report(c,report):
         state=report['actual_optimizer_steps'][role]
         if state['step_min']!=steps or state['step_max']!=steps or state['tensor_count']<=0:
             raise ValueError('Actual AdamW step counters mismatch')
+    if report.get('gradient_accumulation') != {'sync_with_dataloader':False,'steps':p['gradient_accumulation_steps']}:
+        raise ValueError('PPO prompt-loader boundary accumulation is not accepted')
+    observed=report.get('optimizer_checks',[])
+    if len(observed)!=updates:
+        raise ValueError('Per-rollout optimizer evidence is missing')
+    for i,row in enumerate(observed,1):
+        expected_steps=i*p['num_ppo_epochs']*p['num_mini_batches']
+        if row['rollout_update']!=i or row['expected_steps']!=expected_steps or row['sync_with_dataloader']:
+            raise ValueError('Per-rollout accumulation contract mismatch')
+        for role in ('actor','critic'):
+            if row['actual'][role]['step_min']!=expected_steps or row['actual'][role]['step_max']!=expected_steps:
+                raise ValueError('Per-rollout actual optimizer steps mismatch')
     checks=report['probability_checks']
     if len(checks)!=updates or [x['rollout_update'] for x in checks]!=list(range(1,updates+1)):
         raise ValueError('A PPO probability check is missing')

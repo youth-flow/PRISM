@@ -255,7 +255,10 @@ def train_ppo(c, target, w, prompts, seed):
     result = {"total_episodes": args.total_episodes, "rollout_batch_size": args.batch_size, "rollout_updates": args.num_total_batches, "ppo_epochs_per_rollout": args.num_ppo_epochs, "mini_batches_per_epoch": args.num_mini_batches, "kl_coef": args.kl_coef, "gamma": args.gamma, "gae_lambda": args.lam, "temperature": 1.0, "critic": "frozen_sft_plus_linear_head", "reference": "actor_base_with_lora_disabled", "log_history": history}
     if numerics:
         result.update(numerics=numerics, probability_checks=trainer.probability_checks,
-                      gradient_norm_clipping_executed=False)
+                      gradient_norm_clipping_executed=False,
+                      gradient_accumulation={'sync_with_dataloader': trainer.accelerator.gradient_state.sync_with_dataloader,
+                                             'steps': args.gradient_accumulation_steps},
+                      optimizer_checks=trainer.optimizer_checks)
         if trainer.optimizer_group_report is not None:
             result["optimizer_groups"] = trainer.optimizer_group_report
             from .ppo_optim import optimizer_step_report
