@@ -13,7 +13,7 @@ import yaml
 
 from .config import plan_summary
 from .io import cell, digest, dump, load_config, receipt, root, rows, verify_receipt
-from .local_judge import _call_hash, _execution_settings, _hash, _records, export_packet, validate_packet
+from .local_judge import _call_hash, _execution_settings, _hash, _records, _validate_request_transport, export_packet, validate_packet
 from .judges import judge_settings
 
 
@@ -195,6 +195,8 @@ def _audit_openai_observations(c,method,budget,seed,labels,metadata):
         raw_calls+=1;attempt=event['attempt'];retry=event.get('transport_retry',0);value=event['result'];key=(draw,attempt)
         if type(attempt) is not int or not 0<=attempt<3 or type(retry) is not int or not 0<=retry<=2:
             raise ValueError('Raw training attempt/retransmission bound changed')
+        task=packet['tasks'][draw];assert task['id']==str(draw)
+        _validate_request_transport(packet,task,task['calls'][attempt],value)
         if retry:
             previous=logical.get(key);error=(previous or {}).get('error') or {}
             if (attempt!=2 or previous is None or previous['label'] is not None or error.get('retryable') is not True

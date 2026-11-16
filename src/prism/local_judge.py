@@ -16,7 +16,7 @@ import numpy as np
 import yaml
 
 from .io import cell, digest, dump, load_config, receipt, root, rows, verify_receipt
-from .judges import APIJudge, _parse, evaluation_call_seed, judge_protocol, judge_settings, normalize_preference_result, training_call_seed
+from .judges import APIJudge, _messages, _parse, evaluation_call_seed, judge_protocol, judge_settings, normalize_preference_result, training_call_seed
 
 
 NETWORK_RETRY_LIMIT = 2
@@ -32,6 +32,19 @@ def _transport_retry_protocol(packet):
             (packet.get('judge_protocol')=='preference_tool_enum_v4' or
              (packet.get('judge_protocol')=='preference_ab_v1' and packet['settings']['backend']=='openai'
               and packet.get('request_endpoint')=='https://api.openai.com/v1/responses')))
+
+
+def _validate_request_transport(packet,task,call,result):
+    evidence=(result.get('budget_transport') or {}).get('request_transport')
+    if evidence is None:return
+    if (packet['role']!='training' or packet['settings']['backend']!='openai'
+            or packet['request_endpoint']!='https://api.openai.com/v1/responses'):
+        raise ValueError('Streaming execution is restricted to checked OpenAI training')
+    judge=APIJudge({'judges':{packet['role']:packet['settings']}},packet['role'])
+    left,right=(task['right'],task['left']) if call['flip'] else (task['left'],task['right'])
+    payload=judge._payload(_messages(task['messages'],left,right,packet['role'],protocol=packet['judge_protocol']))
+    expected={'protocol':'responses_sse_v1','effective_payload_sha256':hashlib.sha256(json.dumps({**payload,'stream':True},ensure_ascii=False,sort_keys=True).encode()).hexdigest()}
+    if evidence!=expected:raise ValueError('Effective streaming request payload changed')
 
 
 def _hash(value):
@@ -185,6 +198,7 @@ def _records(packet, results, *, with_accounting=False):
                 raise ValueError("Judge tool channel or endpoint does not match its packet")
         if ((*key, retransmission) in seen or result.get("seed") != call["seed"] or result.get("flip") != call["flip"]):
             raise ValueError("Duplicate or misaligned Judge result")
+        _validate_request_transport(packet,task,call,result)
         if retransmission:
             if (not _transport_retry_protocol(packet) or attempt != len(task["calls"])-1
                     or key not in indexed or retry_counts[key] != retransmission-1 or not _network_failure(indexed[key])):

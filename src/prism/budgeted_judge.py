@@ -217,13 +217,15 @@ def recover_manifest(path):
     return {'recovered_records':count,'http_requests_sent':0,'inspection':inspect_manifest(path)}
 
 
-def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_retries=0):
+def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_retries=0,stream_responses=False):
     if not execute:raise RuntimeError('Paid Judge execution requires --execute')
     m,profile,loaded=load_manifest(path);b=_ledger(m,profile)
     if type(network_retries) is not int or not 0<=network_retries<=NETWORK_RETRY_LIMIT:
         raise ValueError('Network retransmissions must stay within 0..2')
     if network_retries and not all(_transport_retry_protocol(p) for _,p in loaded):
         raise ValueError('Network retransmissions are restricted to checked training packets')
+    if type(stream_responses) is not bool or (stream_responses and not all(_transport_retry_protocol(p) and p['settings']['backend']=='openai' for _,p in loaded)):
+        raise ValueError('Streaming is restricted to checked OpenAI training packets')
     with owner_lock(str(b.path)+'.worker.lock'):
         if b.state()['paused']:raise DispatchPaused('Ledger is paused; explicitly resume after approval')
         _recover(m,loaded,b)
@@ -263,13 +265,14 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
                             self.remember(error)
                             abort.set();raise
                 return Bound()
-        role=loaded[0][1]['role'];managed=ManagedTransport(b,role,transport)
+        role=loaded[0][1]['role'];managed=ManagedTransport(b,role,transport,stream_responses=stream_responses)
         def status(state,error=None):
             with network_lock:observed=list(failures)
             value={'state':state,'pid':os.getpid(),'timestamp_utc':datetime.now(timezone.utc).isoformat(),
                    'elapsed_seconds':time.monotonic()-started,'packets':_progress(loaded),'ledger':b.state(),
                    'network_retries_limit':network_retries,
                    'network_breaker':{'errors':2,'window_seconds':60},
+                   'responses_transport':'sse_v1' if stream_responses else 'json',
                    'transport_failures':observed,
                    'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py')},
                    'error_type':type(error).__name__ if error else None}
@@ -336,7 +339,7 @@ def _resume_own_network_pause(budget):
                    ('resume','Checked bounded network recovery; original attempts and caps retained'))
 
 
-def supervise_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_retries=0,max_network_resumes=0,healthcheck=None,sleeper=time.sleep):
+def supervise_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_retries=0,max_network_resumes=0,stream_responses=False,healthcheck=None,sleeper=time.sleep):
     """Bounded orchestration only; run_packet still enforces every original slot.
 
     No restart on budget stops, authentication, exhausted semantic/transport
@@ -346,7 +349,7 @@ def supervise_manifest(path,*,execute=False,transport=None,poll_seconds=20,netwo
     if type(max_network_resumes) is not int or not 0<=max_network_resumes<=8:
         raise ValueError('Network resumes must stay within 0..8')
     if max_network_resumes==0:
-        return run_manifest(path,execute=True,transport=transport,poll_seconds=poll_seconds,network_retries=network_retries)
+        return run_manifest(path,execute=True,transport=transport,poll_seconds=poll_seconds,network_retries=network_retries,stream_responses=stream_responses)
     m,profile,loaded=load_manifest(path);b=_ledger(m,profile)
     if max_network_resumes and any(p['role']!='training' for _,p in loaded):
         raise ValueError('Automatic network recovery is restricted to checked training')
@@ -355,7 +358,7 @@ def supervise_manifest(path,*,execute=False,transport=None,poll_seconds=20,netwo
     healthcheck=healthcheck or available
     for resumed in range(max_network_resumes+1):
         try:
-            return run_manifest(path,execute=True,transport=transport,poll_seconds=poll_seconds,network_retries=network_retries)
+            return run_manifest(path,execute=True,transport=transport,poll_seconds=poll_seconds,network_retries=network_retries,stream_responses=stream_responses)
         except DispatchPaused:
             if resumed==max_network_resumes:raise
             if b.state()['pause_reason']!=_WORKER_PAUSE_REASON or not Path(m['status']).exists():raise
@@ -387,6 +390,7 @@ def main():
         if name=='run':
             p.add_argument('--execute',action='store_true');p.add_argument('--network-retries',type=int,default=0)
             p.add_argument('--max-network-resumes',type=int,default=0)
+            p.add_argument('--responses-stream',action='store_true')
     for name in ('pause','resume'):
         p=sub.add_parser(name);p.add_argument('--ledger',required=True);p.add_argument('--reason',required=True)
     a=parser.parse_args()
@@ -402,7 +406,7 @@ def main():
         b=USDBudget.open_existing(a.ledger);b.control(a.action=='pause',a.reason);result=b.state()
     elif a.action=='inspect':result=inspect_manifest(a.manifest)
     elif a.action=='recover':result=recover_manifest(a.manifest)
-    else:result=supervise_manifest(a.manifest,execute=a.execute,network_retries=a.network_retries,max_network_resumes=a.max_network_resumes)
+    else:result=supervise_manifest(a.manifest,execute=a.execute,network_retries=a.network_retries,max_network_resumes=a.max_network_resumes,stream_responses=a.responses_stream)
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 

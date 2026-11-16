@@ -277,6 +277,28 @@ class USDBudget:
             raise ValueError('Cached HTTP response identity changed')
         return value['response'],value['request_id']
 
+    def request_transport(self,identity,model,payload,*,record=None):
+        """Bind an explicit wire-only transport override, including on replay."""
+        target=self.response_dir/(hashlib.sha256(identity.encode()).hexdigest()+'.transport.json')
+        fingerprint=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+        expected={'protocol':'responses_sse_v1','effective_payload_sha256':hashlib.sha256(json.dumps({**payload,'stream':True},ensure_ascii=False,sort_keys=True).encode()).hexdigest()}
+        if record is not None:
+            if record!=expected:raise ValueError('Invalid streaming request transport')
+            value={'identity':identity,'model':model,'payload_sha':fingerprint,'transport':record}
+            if not target.exists():
+                self.response_dir.mkdir(parents=True,exist_ok=True);temporary=None
+                try:
+                    with tempfile.NamedTemporaryFile('w',encoding='utf-8',dir=self.response_dir,delete=False) as stream:
+                        temporary=Path(stream.name);json.dump(value,stream,ensure_ascii=False,allow_nan=False);stream.flush();os.fsync(stream.fileno())
+                    os.replace(temporary,target)
+                finally:
+                    if temporary is not None and temporary.exists():temporary.unlink()
+        if not target.exists():return None
+        value=json.loads(target.read_text(encoding='utf-8'))
+        if ((value['identity'],value['model'],value['payload_sha'])!=(identity,model,fingerprint)
+                or value['transport']!=expected):raise ValueError('Stored streaming transport identity changed')
+        return value['transport']
+
     def reserve(self, identity, purpose, model, payload):
         if purpose not in self.limits or purpose == "total" or model not in PRICES:
             raise ValueError("Unknown budget purpose or model price")
@@ -337,9 +359,11 @@ class USDBudget:
 
 
 class BudgetTransport:
-    def __init__(self, budget, purpose, transport=None):
+    def __init__(self, budget, purpose, transport=None,*,stream_responses=False):
         from .judges import request_json
+        if type(stream_responses) is not bool:raise ValueError('Streaming flag must be boolean')
         self.budget, self.purpose, self.transport = budget, purpose, transport or request_json
+        self.stream_responses=stream_responses
 
     def for_call(self, identity):
         parent = self
@@ -361,6 +385,8 @@ class BudgetTransport:
                             raise
                         time.sleep(.25)
                 self.receipt = {"dispatch_id": identity, "replayed_response": prior is not None, "price_date": PRICE_DATE}
+                evidence=parent.budget.request_transport(identity,model,payload)
+                if evidence:self.receipt['request_transport']=evidence
                 if prior:
                     if prior[5] == "completed":
                         return json.loads(prior[6]), prior[7]
@@ -383,8 +409,14 @@ class BudgetTransport:
                         parent.budget.complete(identity,model,data,request_id)
                         return data,request_id
                     raise URLError("Earlier dispatch has uncertain billing; reservation retained, no redispatch")
+                wire_payload=payload
+                if parent.stream_responses:
+                    wire_payload={**payload,'stream':True}
+                    evidence={'protocol':'responses_sse_v1','effective_payload_sha256':hashlib.sha256(json.dumps(wire_payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()}
+                    parent.budget.request_transport(identity,model,payload,record=evidence)
+                    self.receipt['request_transport']=evidence
                 try:
-                    data, request_id = parent.transport(url,payload,key,timeout)
+                    data, request_id = parent.transport(url,wire_payload,key,timeout)
                 except HTTPError as exc:
                     data=_http_failure(exc);request_id=data['headers'].get('x-request-id')
                     parent.budget.cache_response(identity,model,payload,data,request_id)

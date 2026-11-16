@@ -158,12 +158,40 @@ class _NoRedirect(HTTPRedirectHandler):
 
 def request_json(url, payload, api_key, timeout):
     """One synchronous JSON request; do not expose request or error bodies."""
+    deadline=time.monotonic()+timeout
     request = Request(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                       headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
                       method="POST")
     with build_opener(_NoRedirect()).open(request, timeout=timeout) as response:
-        data = json.load(response)
+        data = _read_response_events(response,deadline=deadline) if payload.get('stream') is True else json.load(response)
         return data, response.headers.get("x-request-id")
+
+
+def _read_response_events(response,*,deadline=None):
+    """Use only the final provider Response object, never partial text deltas."""
+    lines=[];received=0;limit=16*1024*1024
+    while True:
+        if deadline is not None and time.monotonic()>=deadline:raise TimeoutError('Responses stream exceeded request timeout')
+        line=response.readline(limit+1)
+        if deadline is not None and time.monotonic()>=deadline:raise TimeoutError('Responses stream exceeded request timeout')
+        if not line:raise URLError('Responses stream closed before a terminal event')
+        received+=len(line)
+        if received>limit:raise ValueError('Responses event stream exceeds limit')
+        if line.strip():
+            if line.startswith(b'data:'):lines.append(line[5:].lstrip(b' ').rstrip(b'\r\n'))
+            continue
+        if not lines:continue
+        encoded=b'\n'.join(lines);lines=[]
+        if encoded==b'[DONE]':raise URLError('Responses stream ended without a terminal Response')
+        event=json.loads(encoded)
+        if not isinstance(event,dict):raise ValueError('Malformed Responses event')
+        if event.get('type')=='error':raise ValueError('Responses stream reported an API error')
+        terminal={'response.completed':'completed','response.incomplete':'incomplete','response.failed':'failed'}
+        if event.get('type') not in terminal:continue
+        data=event.get('response')
+        if not isinstance(data,dict) or data.get('status')!=terminal[event['type']] or not isinstance(data.get('usage'),dict):
+            raise ValueError('Malformed terminal Response or missing billing usage')
+        return data
 
 
 def _usage(data):

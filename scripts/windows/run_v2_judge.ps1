@@ -6,6 +6,7 @@ param(
     [string]$ProxyUrl = 'http://127.0.0.1:12450',
     [ValidateRange(0,2)][int]$NetworkRetries = 0,
     [ValidateRange(0,8)][int]$MaxNetworkResumes = 0,
+    [switch]$ResponsesStream,
     [switch]$Execute
 )
 $ErrorActionPreference = 'Stop'
@@ -29,7 +30,9 @@ try {
         }
         $env:HTTP_PROXY = $ProxyUrl
         $env:HTTPS_PROXY = $ProxyUrl
-        & $Python -X utf8 -m prism.budgeted_judge run --manifest $Manifest --execute --network-retries $NetworkRetries --max-network-resumes $MaxNetworkResumes
+        $taskTransportArgs = @()
+        if ($ResponsesStream) { $taskTransportArgs += '--responses-stream' }
+        & $Python -X utf8 -m prism.budgeted_judge run --manifest $Manifest --execute --network-retries $NetworkRetries --max-network-resumes $MaxNetworkResumes @taskTransportArgs
     }
     if ($LASTEXITCODE -ne 0) { throw "V2 Judge stopped with exit code $LASTEXITCODE. Keep the same ledger and raw results." }
 }
