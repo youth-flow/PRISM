@@ -258,4 +258,9 @@ def train_ppo(c, target, w, prompts, seed):
                       gradient_norm_clipping_executed=False)
         if trainer.optimizer_group_report is not None:
             result["optimizer_groups"] = trainer.optimizer_group_report
+            from .ppo_optim import optimizer_step_report
+            result['actual_optimizer_steps']=optimizer_step_report(trainer.optimizer)
+            expected=args.num_total_batches*args.num_ppo_epochs*args.num_mini_batches
+            if any(v['step_min']!=expected or v['step_max']!=expected for v in result['actual_optimizer_steps'].values()):
+                raise RuntimeError('Actor/critic AdamW state counters do not match the configured completed updates')
     return result

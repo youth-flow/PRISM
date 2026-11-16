@@ -2,7 +2,16 @@ import pytest
 import torch
 from torch import nn
 
-from prism.ppo_optim import separate_critic_learning_rate
+from prism.ppo_optim import optimizer_step_report, separate_critic_learning_rate
+
+
+def test_step_report_reads_actual_adamw_state_counters_for_both_roles():
+    actor=nn.Parameter(torch.ones(2));critic=nn.Parameter(torch.ones(2))
+    optimizer=torch.optim.AdamW([{'params':[actor],'prism_role':'actor'},{'params':[critic],'prism_role':'critic'}],lr=1e-3)
+    for _ in range(5):
+        optimizer.zero_grad();(actor.sum()+critic.sum()).backward();optimizer.step()
+    report=optimizer_step_report(optimizer)
+    assert report=={role:{'tensor_count':1,'step_min':5,'step_max':5} for role in ('actor','critic')}
 
 
 def test_separate_rates_preserve_decay_coverage_and_scheduler_ratio():

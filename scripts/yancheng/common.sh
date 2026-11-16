@@ -56,7 +56,7 @@ prism_stage_gpu() {
   local gpu=0
   case "$1" in
     smoke|model-smoke|rollout|rollout-shard|label|policy|evaluate-reference|evaluate-generate|evaluate-judge) gpu=1 ;;
-    cpu-smoke|stage-assets|prepare-data|merge-rollout|design|sample|cluster-label|reward|aggregate|validate|judge-export|judge-import) gpu=0 ;;
+    cpu-smoke|stage-assets|prepare-data|merge-rollout|design|sample|cluster-label|reward|aggregate|validate|judge-export|judge-import|fixed-candidates|v2-sample-export|v2-materialize|v2-audit-reward|v2-audit-policy) gpu=0 ;;
     *) prism_die "Unknown stage: $1" ;;
   esac
   # The Python config/backend layer computes resource needs. Bash receives that
@@ -90,11 +90,13 @@ prism_stage_resources() {
       cpu-smoke) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=00:05:00 ;;
       stage-assets) PRISM_DEFAULT_CPUS=4 PRISM_DEFAULT_MEMORY=6G PRISM_DEFAULT_TIME=04:00:00 ;;
       prepare-data) PRISM_DEFAULT_CPUS=16 PRISM_DEFAULT_MEMORY=24G PRISM_DEFAULT_TIME=06:00:00 ;;
-      design) PRISM_DEFAULT_CPUS=16 PRISM_DEFAULT_MEMORY=24G PRISM_DEFAULT_TIME=12:00:00 ;;
+      design|fixed-candidates) PRISM_DEFAULT_CPUS=16 PRISM_DEFAULT_MEMORY=24G PRISM_DEFAULT_TIME=12:00:00 ;;
       merge-rollout) PRISM_DEFAULT_CPUS=4 PRISM_DEFAULT_MEMORY=6G PRISM_DEFAULT_TIME=01:00:00 ;;
       cluster-label) PRISM_DEFAULT_CPUS=2 PRISM_DEFAULT_MEMORY=3G PRISM_DEFAULT_TIME=04:00:00 ;;
       sample) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=00:30:00 ;;
       reward) PRISM_DEFAULT_CPUS=8 PRISM_DEFAULT_MEMORY=12G PRISM_DEFAULT_TIME=04:00:00 ;;
+      v2-audit-reward) PRISM_DEFAULT_CPUS=8 PRISM_DEFAULT_MEMORY=12G PRISM_DEFAULT_TIME=00:30:00 ;;
+      v2-sample-export|v2-materialize|v2-audit-policy) PRISM_DEFAULT_CPUS=2 PRISM_DEFAULT_MEMORY=3G PRISM_DEFAULT_TIME=01:00:00 ;;
       label) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=12:00:00 ;;
       evaluate-judge) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=18:00:00 ;;
       aggregate|validate|judge-export|judge-import) PRISM_DEFAULT_CPUS=1 PRISM_DEFAULT_MEMORY=1500M PRISM_DEFAULT_TIME=01:00:00 ;;

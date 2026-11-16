@@ -5,7 +5,12 @@ from urllib.error import URLError
 
 import pytest
 
-from prism.api_budget import BudgetExceeded, BudgetTransport, USDBudget, usage_micro_usd
+from prism.api_budget import BudgetExceeded, BudgetTransport, DispatchPaused, USDBudget, journal_mode, usage_micro_usd
+
+
+@pytest.mark.parametrize('version,expected',[((3,50,0),'DELETE'),((3,50,7),'WAL'),((3,44,6),'WAL'),((3,45,0),'DELETE'),((3,51,2),'DELETE'),((3,51,3),'WAL')])
+def test_unpatched_sqlite_does_not_enable_wal(version,expected):
+    assert journal_mode(version)==expected
 
 
 def test_usage_includes_cache_writes_and_reasoning_output():
@@ -114,3 +119,55 @@ def test_purpose_reallocation_keeps_total_cap_and_pending_wait_semantics(tmp_pat
     b.reserve('waiting','training','gpt-6.1-sol',payload)
     with pytest.raises(ValueError,match='only tighten'):
         b.tighten_limits(total_usd=.11,purposes={'training':.08,'evaluation':.02},reason='Must not raise total')
+
+
+def test_received_http_survives_settlement_failure_without_another_request(tmp_path,monkeypatch):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=1,purposes={'training':1})
+    payload={'model':'gpt-6.1-sol','max_output_tokens':64,'input':[]};sent=[]
+    def fake(*args):
+        sent.append(True)
+        return {'usage':{'input_tokens':10,'output_tokens':2},'service_tier':'flex'},'received'
+    transport=BudgetTransport(b,'training',fake);complete=b.complete
+    def blocked(*args):raise sqlite3.OperationalError('database is locked')
+    monkeypatch.setattr(b,'complete',blocked)
+    with pytest.raises(sqlite3.OperationalError,match='database is locked'):
+        transport.for_call('same')('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)
+    assert b.cached_response('same','gpt-6.1-sol',payload) is not None
+    monkeypatch.setattr(b,'complete',complete)
+    bound=transport.for_call('same')
+    assert bound('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)[1]=='received'
+    assert len(sent)==1 and bound.receipt['replayed_response']
+    assert b.snapshot()['training']['charged_usd_estimate']==.00002
+
+
+def test_32_workers_on_existing_large_ledger_settle_without_lost_responses(tmp_path):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=20,purposes={'training':20})
+    # The real incident occurred after thousands of rows, not on an empty DB.
+    with b.transaction() as db:
+        db.executemany("INSERT INTO dispatch VALUES (?,'training','gpt-6.1-sol','old',1,0,'completed','{}',NULL)",
+                       [(f'old-{i}',) for i in range(12000)])
+    reopened=USDBudget.open_existing(b.path)
+    payload={'model':'gpt-6.1-sol','max_output_tokens':64,'input':[]}
+    def fake(*args):return {'usage':{'input_tokens':10,'output_tokens':2},'service_tier':'flex'},'test'
+    transports=[BudgetTransport(b,'training',fake),BudgetTransport(reopened,'training',fake)]
+    def call(i):return transports[i%2].for_call(str(i))('https://api.openai.com/v1/responses',payload,'TEST_KEY',5)
+    with ThreadPoolExecutor(max_workers=32) as pool:completed=list(pool.map(call,range(128)))
+    assert len(completed)==128
+    snapshot=b.snapshot()['training']
+    assert snapshot['dispatches']==12128 and snapshot['unresolved_reservations_usd']==0
+    assert snapshot['charged_usd_estimate']==.00256
+
+
+def test_pause_blocks_new_spending_but_preserves_cached_replay(tmp_path):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=1,purposes={'training':1})
+    payload={'model':'gpt-6.1-sol','max_output_tokens':64,'input':[]}
+    t=BudgetTransport(b,'training',lambda *args:({'usage':{'input_tokens':10,'output_tokens':2}},'test'))
+    t.for_call('done')('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)
+    b.control(True,'User wants code/configuration review first')
+    assert b.state()['paused']
+    assert t.for_call('done')('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)[1]=='test'
+    with pytest.raises(DispatchPaused,match='paused'):
+        t.for_call('new')('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)
+    assert b.snapshot()['training']['dispatches']==1
+    b.control(False,'Explicit subsequent start')
+    assert not b.state()['paused']

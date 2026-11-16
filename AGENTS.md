@@ -1,7 +1,8 @@
 # PRISM 工作约定
 
 - 默认使用 `main` 分支；用户另有明确要求时再调整。
-- 用户已授权：每个重要、可验收的工作节点，在完成相关检查后，主动将本任务的变更 `git add`、`git commit` 并 `git push origin main`，无需再次询问。
+- 用户最新明确要求新建并使用`v2`分支整理工程，本任务在`v2`提交并`git push origin v2`，不再推送main；main保留8bce0a2。用户要求先完成工程/资源文档并汇报最终配置，然后再开始，当前正式实验和付费API必须暂停。只做代码验证与离线核对，不自动resume或提交正式训练/生成/Design任务。
+- 用户已授权：每个重要、可验收的工作节点，在完成相关检查后，主动将本任务的变更 `git add`、`git commit` 并普通推送当前用户指定分支（本任务`git push origin v2`），无需再次询问。
 - 提交前检查 diff 和工作区状态，只纳入本任务的相关变更；不提交密钥、模型权重、运行产物、虚拟环境或无关修改。
 - 使用普通 push，不擅自 force push 或覆盖远端历史。推送后核对本地与远端提交；失败时如实说明未同步状态。
 
@@ -54,3 +55,4 @@
 - 用户最新将V2总API预算降至40美元（包含已发生校准/标注），覆盖旧54/46/5计划。已在原账本增加实时SQLite触发器：总39、训练34、评价3.2、校准3美元，各用途与总额同时限制，留1美元余量；触发器对旧PID30624缓存的旧限额也生效。原dispatch/响应/未知预留不重置，备份local/v2-api-budget.before-40usd.sqlite，ceiling_change记录理由。新增5项预算测试及相关packet回归共14通过。取消1200次额外Sol最终参考；主标签仍统一Sol high，主评价暂Luna medium，不中途混Judge。8192原目标受34训练上限约束，不能承诺全部完成；若统一收缩6144，必须新配置与已标注前缀继承验收，尚未执行。Design3000/PPO2000/Eval500未改，新Reward/PPO尚未开始。预算触发导致旧worker IntegrityError时应解释为限额停止，不能误报科研数值失败；先核对账本/原始流，不提高上限或重复派发。
 - 用户最终冻结prompt3000/2000/500和预算2048/4096/8192，其余研究设置不变，只确定两OpenAI Judge且总费<=40；6144备选取消。最终执行profile为configs/judges.v2.yaml：训练Sol high/Flex、评价Luna medium/Flex，均Responses/max4096/3次/900秒、不显式temperature；无额外Sol最终参考。新增Luna Flex16次真实调用全部有效且实际返回半价档，校准累计1152次/$1.694933。实时总39不提高，仅在其内重分配校准2/训练35.5/评价1.8；包括旧消费/未知预留。约5800训练请求外推全量约34.4，加评价约1.36和校准，总估37–39，达到停止线则报告未完成，不改N或Judge。原experiment.v2.yaml/experiment.json字节不动；评价export必须传--execution-profile并哈希绑定Flex/900s，import收据保留有效参数，不能隐藏与原执行档位的差异。相关本机78通过，预算执行器升级须先收完在途再续跑；完整集群回归和重启按实际后续记录。详见docs/v2-frozen.md。
 - 最终源8112dd9已推送main并独立部署，完整集群1980995为192 passed/69秒。通过账本admission暂停旧worker30624的新请求并收完在途，7649有效/7652原始请求与SQLite逐条匹配，0在途/0漏写，3条未知费用约$0.256547保留；旧IntegrityError是计划内drain。私有resume.audit.json和local.execution.json固定校验，原packet/训练设置未改。现Windows新PID28512运行worker.final.py，用source-8112dd9不可变执行器、原63fe8c4训练packets和原结果文件续跑；初始成本外推34.416317通过35.5训练闸门，实时全局39不变，校准2/训练35.5/评价1.8。状态仍为local/v2-openai-63fe8c4/worker.status.json，新日志worker.final.stdout/stderr.log；旧日志保留。正式标签尚未完成，Reward/PPO及正式评价未开始；不要启动第二worker或重复标注。
+- 整理v2时核对到旧PID28512已因SQLite写锁超时停止（BEGIN IMMEDIATE后无事务却ROLLBACK掩盖原错误），11776有效标签、11780派发记录，4条未知费用预留$0.345652；API admission现已按用户要求暂停，集群无运行/排队作业。新代码加入同路径进程内写锁、只对修复版SQLite启用WAL（本机3.50.0使用DELETE）、HTTP响应先落盘后结算、公开预算执行/离线恢复入口，禁止重置旧费用或伪造缺失响应。新增v2计划/冻结/前缀导入和Reward/PPO验收、真实AdamW计数以及资源文档；验证与离线恢复结果以随后实际记录为准。

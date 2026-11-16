@@ -3,6 +3,7 @@
 export PRISM_STORAGE="$(readlink -f "${HOME}/online1")"
 export PRISM_ROOT="${PRISM_STORAGE}/prism"
 export PRISM_REPO="${PRISM_STORAGE}/PRISM"
+export PRISM_ASSET_ROOT="${PRISM_STORAGE}/PRISM" # Fixed assets outside source releases.
 export PRISM_IMAGE="${PRISM_ROOT}/images/prism.sif"
 export PRISM_IMAGE_SHA256="FILL_FROM_VERIFIED_RUNTIME_BUILD"
 export PRISM_HF_CACHE="${PRISM_ROOT}/hf-cache"
@@ -17,11 +18,13 @@ export PRISM_CONTAINER_RUNTIME="singularity"  # Verified on gpu056 with the unch
 export PRISM_CONTAINER_MODULE="amd/singularity/3.10.4"
 # Verified account/partitions on 2026-11-14, unlike the older manual examples.
 export PRISM_ACCOUNT="sc001"
-export PRISM_GPU_PARTITION="q_amd_gpu_nvidia_A100_share"
+export PRISM_GPU_PARTITION="q_intel_gpu_nvidia_4090_48g_share"
 export PRISM_CPU_PARTITION="q_amd_share"
 export PRISM_QOS=""                 # Account offers normal,standby; keep site default.
-export PRISM_GPU_GRES="gpu:tesla:1" # One process, one A100; no exclusive node.
-export PRISM_GPU_MODEL="A100"
+export PRISM_GPU_GRES="gpu:tesla:1" # One process, one validated GPU; no exclusive node.
+export PRISM_GPU_MODEL="4090"
+# Verified alternate: q_amd_gpu_nvidia_A100_share with PRISM_GPU_MODEL=A100.
+# Request one partition at a time; this site rejects the tested multi-partition request.
 # submit.sh supplies audited per-stage defaults. Set any of these only as an
 # explicit one-invocation override after inspecting the relevant pilot log.
 # export PRISM_CPUS=8
@@ -29,6 +32,6 @@ export PRISM_GPU_MODEL="A100"
 # export PRISM_TIME=08:00:00
 export http_proxy="http://174.0.250.13:3128"
 export https_proxy="http://174.0.250.13:3128"
-export PRISM_EXCLUDE=""
+export PRISM_EXCLUDE="bn002,bn009"   # Prior CPU starter/Lustre stalls; keep evidence before changing.
 # Platform preparation only. Enable explicitly when ready for scheduled work.
 export PRISM_ALLOW_SUBMIT=0

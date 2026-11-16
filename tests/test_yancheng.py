@@ -179,3 +179,37 @@ def test_gpu_partition_list_accepts_only_complete_names(platform):
     for selected, expected in (("q_a100", 0), ("q_4090", 0), ("q_409", 2), ("q_other", 2)):
         result = subprocess.run([bash, "-c", f"source {source}\nprism_check_gpu_partition"], env={**env, "PRISM_GPU_PARTITION": "q_a100,q_4090", "SLURM_JOB_PARTITION": selected}, capture_output=True, text=True)
         assert result.returncode == expected, result.stderr
+
+
+def test_v2_metadata_and_audit_stages_never_request_gpu(platform):
+    run,cfg,repo,env=platform
+    for stage in ('v2-sample-export','v2-materialize','v2-audit-reward','v2-audit-policy','fixed-candidates'):
+        result=run('--dry-run',stage,'--config',shell_path(cfg))
+        assert result.returncode==0,result.stderr
+        assert '--gres' not in result.stdout and '--partition=q_cpu_verified' in result.stdout
+    bash=str(Path(shutil.which('git')).parents[1]/'bin/bash.exe') if os.name=='nt' else shutil.which('bash')
+    for stage in ('label','evaluate-judge','cluster-label'):
+        result=subprocess.run([bash,shell_path(repo/'scripts/yancheng/submit_v2.sh'),'--dry-run',stage,'--config',shell_path(cfg)],env=env,capture_output=True,text=True)
+        assert result.returncode!=0 and 'V2 OpenAI runs locally' in result.stderr
+    result=subprocess.run([bash,shell_path(repo/'scripts/yancheng/submit_v2.sh'),'--dry-run','policy','--config',shell_path(cfg)],
+                          env={**env,'PRISM_GPU_PARTITION':'q_a100,q_4090'},capture_output=True,text=True)
+    assert result.returncode!=0 and 'one verified GPU partition' in result.stderr
+
+
+def test_release_bundle_is_checked_out_once_without_overwriting_existing_source(platform):
+    _,_,repo,env=platform;storage=repo.parent
+    # Linux has distinct PRISM/ and prism/ siblings; Windows case-folds them.
+    # Isolate the release root so this test models Linux's actual directory tree.
+    deployment=storage/'deployment';deployment.mkdir()
+    env={**env,'PRISM_STORAGE':shell_path(deployment)}
+    bundle=deployment/'source copy.bundle'
+    subprocess.run(['git','bundle','create',str(bundle),'main'],cwd=repo,check=True,capture_output=True)
+    commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip()
+    target=deployment/'prism/source-releases'/commit
+    bash=str(Path(shutil.which('git')).parents[1]/'bin/bash.exe') if os.name=='nt' else shutil.which('bash')
+    command=[bash,shell_path(repo/'scripts/yancheng/prepare_release.sh'),'--bundle',shell_path(bundle),'--commit',commit,'--target',shell_path(target)]
+    first=subprocess.run(command,env=env,capture_output=True,text=True)
+    assert first.returncode==0,first.stderr
+    assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=target,text=True).strip()==commit
+    again=subprocess.run(command,env=env,capture_output=True,text=True)
+    assert again.returncode!=0 and 'never overwrite' in again.stderr

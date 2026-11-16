@@ -2,6 +2,21 @@
 import math
 
 
+def optimizer_step_report(optimizer):
+    """Read real AdamW state counters after training; do not alter the loop."""
+    result={}
+    for group in optimizer.param_groups:
+        role=group.get('prism_role')
+        if role not in ('actor','critic'):raise ValueError('Optimizer role metadata missing')
+        for parameter in group['params']:
+            value=optimizer.state.get(parameter,{}).get('step',0)
+            step=int(value.item() if hasattr(value,'item') else value)
+            item=result.setdefault(role,{'tensor_count':0,'step_min':step,'step_max':step})
+            item['tensor_count']+=1;item['step_min']=min(item['step_min'],step);item['step_max']=max(item['step_max'],step)
+    if set(result)!= {'actor','critic'}:raise ValueError('Expected actor and critic optimizer state')
+    return result
+
+
 def separate_critic_learning_rate(optimizer, model, learning_rate):
     if (type(learning_rate) not in (int, float) or not math.isfinite(learning_rate)
             or learning_rate <= 0):

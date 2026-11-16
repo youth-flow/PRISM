@@ -53,9 +53,11 @@ else
 fi
 runner=("$PRISM_CONTAINER_RUNTIME" exec "${opts[@]}" "$PRISM_IMAGE")
 
-if [[ "$stage" == cpu-smoke && -f "$PRISM_REPO/assets/ifeval/source-manifest.json" ]]; then
-  export "${runtime_prefix}PRISM_TEST_IFEVAL_SOURCE=$PRISM_REPO/assets/ifeval"
-  export "${runtime_prefix}PRISM_TEST_NLTK_DATA=$PRISM_REPO/assets/nltk_data"
+test_assets="${PRISM_ASSET_ROOT:-$PRISM_STORAGE/PRISM}"
+if [[ "$stage" == cpu-smoke && -f "$test_assets/assets/ifeval/source-manifest.json" ]]; then
+  prism_path_under "$PRISM_STORAGE" "$test_assets"
+  export "${runtime_prefix}PRISM_TEST_IFEVAL_SOURCE=$test_assets/assets/ifeval"
+  export "${runtime_prefix}PRISM_TEST_NLTK_DATA=$test_assets/assets/nltk_data"
 fi
 
 if [[ "$stage" == label || "$stage" == evaluate-judge ]]; then
@@ -70,6 +72,11 @@ if [[ "$stage" == label || "$stage" == evaluate-judge ]]; then
   fi
 fi
 echo "stage=$stage commit=$PRISM_COMMIT image=$PRISM_IMAGE_SHA256 runtime=$PRISM_CONTAINER_RUNTIME job=$SLURM_JOB_ID"
+if [[ "${PRISM_V2_EXECUTION:-0}" == 1 && "$stage" == policy ]]; then
+  "${runner[@]}" python -m prism.v2 gate-policy "$@" --execute
+elif [[ "${PRISM_V2_EXECUTION:-0}" == 1 && "$stage" == evaluate-generate ]]; then
+  "${runner[@]}" python -m prism.v2 gate-evaluation "$@" --execute
+fi
 if [[ "$gpu" == 1 && "$stage" != smoke && "$stage" != model-smoke ]]; then
   echo "gpu_partition=$SLURM_JOB_PARTITION expected_model=${PRISM_GPU_MODEL:-A100}"
   "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
@@ -91,6 +98,10 @@ elif [[ "$stage" == cluster-label ]]; then
   "${runner[@]}" python -m prism.cluster_judge "$@" --key-file "$key_file" --workers "${PRISM_JUDGE_WORKERS:-4}" --network-retries "${PRISM_JUDGE_NETWORK_RETRIES:-0}" --execute
 elif [[ "$stage" == judge-export || "$stage" == judge-import ]]; then
   "${runner[@]}" python -m prism.local_judge "${stage#judge-}" "$@"
+elif [[ "$stage" == fixed-candidates ]]; then
+  "${runner[@]}" python -m prism.fixed_candidates "$@"
+elif [[ "$stage" == v2-* ]]; then
+  "${runner[@]}" python -m prism.v2 "${stage#v2-}" "$@"
 else
   "${runner[@]}" python -m prism.cli "$stage" "$@"
 fi

@@ -8,8 +8,11 @@ from contextlib import contextmanager
 from decimal import Decimal, ROUND_CEILING
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
+import tempfile
+from threading import Lock, RLock
 import time
 from urllib.error import URLError
 
@@ -18,6 +21,24 @@ from urllib.error import URLError
 PRICES = {"gpt-6.1-sol": (2, .1, 2.5, 4, 10),
           "gpt-6-luna": (.1, .01, .125, .2, .5)}
 PRICE_DATE = "2026-11-16"
+_LOCKS = {}
+_LOCKS_GUARD = Lock()
+
+
+def _path_lock(path):
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(os.path.normcase(str(path.resolve())), RLock())
+
+
+def journal_mode(version):
+    # SQLite's published WAL-reset fix: 3.51.3+, or its 3.44.6/3.50.7
+    # backports. Keep older bundled Python runtimes on rollback journals.
+    safe=version>=(3,51,3) or (version[:2]==(3,50) and version>=(3,50,7)) or (version[:2]==(3,44) and version>=(3,44,6))
+    return 'WAL' if safe else 'DELETE'
+
+
+class DispatchPaused(RuntimeError):
+    pass
 
 
 class BudgetExceeded(RuntimeError):
@@ -66,6 +87,16 @@ class USDBudget:
     def __init__(self, path, *, total_usd, purposes):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = _path_lock(self.path)
+        self.response_dir = self.path.with_name(self.path.name+'.responses')
+        # Serialize same-process writes; use WAL only on fixed SQLite releases.
+        # No package upgrade or WAL on an unpatched bundled runtime is needed.
+        with self._lock:
+            db=sqlite3.connect(self.path,timeout=60)
+            try:
+                db.execute('PRAGMA journal_mode='+journal_mode(sqlite3.sqlite_version_info))
+            finally:
+                db.close()
         self.limits = {"total": micro_usd(total_usd), **{k: micro_usd(v) for k,v in purposes.items()}}
         if any(v <= 0 for v in self.limits.values()) or "total" in purposes:
             raise ValueError("Positive USD ceilings and named purposes required")
@@ -130,16 +161,82 @@ class USDBudget:
 
     @contextmanager
     def transaction(self):
-        db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        with self._lock:
+            db = sqlite3.connect(self.path, timeout=60, isolation_level=None)
+            try:
+                db.execute('PRAGMA synchronous=FULL')
+                db.execute("BEGIN IMMEDIATE")
+                yield db
+                db.execute("COMMIT")
+            except BaseException:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+            finally:
+                db.close()
+
+    @classmethod
+    def open_existing(cls,path):
+        """Use the original immutable contract, never reset old spending."""
+        path=Path(path)
+        if not path.is_file():
+            raise FileNotFoundError('Existing USD ledger required')
+        db=sqlite3.connect(path,timeout=60)
         try:
-            db.execute("BEGIN IMMEDIATE")
-            yield db
-            db.execute("COMMIT")
-        except BaseException:
-            db.execute("ROLLBACK")
-            raise
+            contract=json.loads(db.execute('SELECT value FROM contract WHERE id=1').fetchone()[0])
         finally:
             db.close()
+        if contract['prices']!={k:list(v) for k,v in PRICES.items()} or contract['price_date']!=PRICE_DATE:
+            raise ValueError('Ledger price snapshot changed')
+        limits=contract['limits']
+        return cls(path,total_usd=limits['total']/1e6,purposes={k:v/1e6 for k,v in limits.items() if k!='total'})
+
+    def control(self,paused,reason):
+        if type(paused) is not bool or not reason.strip():
+            raise ValueError('An explicit pause state and reason are required')
+        with self.transaction() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS dispatch_control (id INTEGER PRIMARY KEY, paused INTEGER NOT NULL, reason TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS admission_events (id INTEGER PRIMARY KEY, timestamp_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, action TEXT NOT NULL, reason TEXT NOT NULL)')
+            db.execute('INSERT OR REPLACE INTO dispatch_control VALUES (1,?,?)',(int(paused),reason))
+            db.execute('INSERT INTO admission_events (action,reason) VALUES (?,?)',('pause' if paused else 'resume',reason))
+            db.execute("""CREATE TRIGGER IF NOT EXISTS drain_api_dispatches BEFORE INSERT ON dispatch
+                WHEN (SELECT paused FROM dispatch_control WHERE id=1)=1 BEGIN
+                SELECT RAISE(ABORT,'API dispatch paused; no HTTP request was sent'); END""")
+
+    def state(self):
+        with self.transaction() as db:
+            limits={k:v/1e6 for k,v in self._effective_limits(db).items()}
+            mode=db.execute('PRAGMA journal_mode').fetchone()[0]
+            control=None
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatch_control'").fetchone():
+                control=db.execute('SELECT paused,reason FROM dispatch_control WHERE id=1').fetchone()
+        return {'limits_usd':limits,'paused':bool(control and control[0]),'pause_reason':control[1] if control else None,
+                'sqlite_version':sqlite3.sqlite_version,'journal_mode':mode,'usage':self.snapshot()}
+
+    def cache_response(self,identity,model,payload,data,request_id):
+        """Persist a received HTTP response before contended SQL settlement."""
+        self.response_dir.mkdir(parents=True,exist_ok=True)
+        value={'identity':identity,'model':model,'payload_sha':hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest(),
+               'response':data,'request_id':request_id}
+        target=self.response_dir/(hashlib.sha256(identity.encode()).hexdigest()+'.json')
+        temporary=None
+        try:
+            with tempfile.NamedTemporaryFile('w',encoding='utf-8',dir=self.response_dir,delete=False) as stream:
+                temporary=Path(stream.name)
+                json.dump(value,stream,ensure_ascii=False,allow_nan=False)
+                stream.flush();os.fsync(stream.fileno())
+            os.replace(temporary,target)
+        finally:
+            if temporary is not None and temporary.exists():temporary.unlink()
+
+    def cached_response(self,identity,model,payload):
+        target=self.response_dir/(hashlib.sha256(identity.encode()).hexdigest()+'.json')
+        if not target.exists():return None
+        value=json.loads(target.read_text(encoding='utf-8'))
+        fingerprint=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+        if (value['identity'],value['model'],value['payload_sha'])!=(identity,model,fingerprint):
+            raise ValueError('Cached HTTP response identity changed')
+        return value['response'],value['request_id']
 
     def reserve(self, identity, purpose, model, payload):
         if purpose not in self.limits or purpose == "total" or model not in PRICES:
@@ -153,6 +250,9 @@ class USDBudget:
                 if prior[:3] != (purpose, model, fingerprint):
                     raise ValueError("A dispatch ID cannot be reused for a different request")
                 return prior
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dispatch_control'").fetchone():
+                control=db.execute('SELECT paused FROM dispatch_control WHERE id=1').fetchone()
+                if control and control[0]:raise DispatchPaused('API dispatch is paused; no request was sent')
             total = db.execute("SELECT COALESCE(SUM(COALESCE(charged,reserved)),0) FROM dispatch").fetchone()[0]
             used = db.execute("SELECT COALESCE(SUM(COALESCE(charged,reserved)),0) FROM dispatch WHERE purpose=?",(purpose,)).fetchone()[0]
             underestimated = db.execute("SELECT COUNT(*) FROM dispatch WHERE charged>reserved").fetchone()[0]
@@ -210,12 +310,19 @@ class BudgetTransport:
                 if prior:
                     if prior[5] == "completed":
                         return json.loads(prior[6]), prior[7]
+                    cached=parent.budget.cached_response(identity,model,payload)
+                    if cached is not None:
+                        data,request_id=cached
+                        parent.budget.complete(identity,model,data,request_id)
+                        return data,request_id
                     raise URLError("Earlier dispatch has uncertain billing; reservation retained, no redispatch")
                 try:
                     data, request_id = parent.transport(url,payload,key,timeout)
-                    parent.budget.complete(identity,model,data,request_id)
-                    return data, request_id
                 except BaseException:
-                    parent.budget.uncertain(identity)
+                    try:parent.budget.uncertain(identity)
+                    except sqlite3.OperationalError:pass  # Retain reserved amount; preserve the original failure.
                     raise
+                parent.budget.cache_response(identity,model,payload,data,request_id)
+                parent.budget.complete(identity,model,data,request_id)
+                return data, request_id
         return Bound()

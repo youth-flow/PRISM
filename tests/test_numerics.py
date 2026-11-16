@@ -123,5 +123,8 @@ def test_fp32_protocol_real_olmo_ppo_passes_guards_and_updates_lora(tmp_path, cr
         assert {g["role"] for g in result["optimizer_groups"]} == {"actor", "critic"}
         assert all(g["initial_lr"] == (critic_rate if g["role"] == "critic" else .001)
                    for g in result["optimizer_groups"])
+        assert all(v['step_min']==v['step_max']==2 for v in result['actual_optimizer_steps'].values())
+        from prism.v2_audit import validate_policy_report
+        assert validate_policy_report(config,result)['actual_adamw_steps']==2
     actor = PeftModel.from_pretrained(base,tmp_path/"policy")
     assert any(p.detach().abs().sum()>0 for n,p in actor.named_parameters() if "lora_B" in n)
