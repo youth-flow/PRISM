@@ -21,9 +21,10 @@ V2执行入口是`scripts/yancheng/submit_v2.sh`。当前用户要求先审阅�
 ## 已验证资源和默认申请
 
 - Slurm account：`sc001`；CPU分区：`q_amd_share`。
-- 默认GPU分区：`q_intel_gpu_nvidia_4090_48g_share`，GRES=`gpu:tesla:1`。
+- 已完成一致FP32 PPO短试的GPU分区：`q_intel_gpu_nvidia_4090_48g_share`，GRES=`gpu:tesla:1`。
   真实设备验收为RTX4090，可见显存约44.5GiB；FP32 PPO短试峰值约34.9GiB。
-- 已验证备用：`q_amd_gpu_nvidia_A100_share`，对应`PRISM_GPU_MODEL=A100`。
+- 已验证CUDA/模型/容器的另一分区：`q_amd_gpu_nvidia_A100_share`，对应`PRISM_GPU_MODEL=A100`。
+  A100尚未完成本轮一致FP32 PPO短试，开始后先验收再放行该卡型的正式PPO。
   单独提交一个分区；站点此前拒绝过组合分区请求，V2 wrapper会阻止此用法。
 - CPU关联曾显示`GrpTRES=cpu=2560`，CPU节点显示128 CPU/193288MB。
   此为授权/配置快照，使用前查询当前状态，按实际所需核心提交。
@@ -43,6 +44,33 @@ V2执行入口是`scripts/yancheng/submit_v2.sh`。当前用户要求先审阅�
 资源默认值以`common.sh`为准。CPU-only内存按约1500MB/核档位配置；通过
 `sacct`记录实际AllocCPUS，不能仅用请求CPU数估算核时。GPU节点上的8CPU/64G
 是已验证PPO配置，不按CPU队列的内存比例推断其可分配性。
+
+2026-11-16 11:57–12:02通过真实SSH完成只读复核，另做`sbatch --test-only`，
+没有创建运行/排队作业或恢复API：
+
+- 私有`env.sh`实际默认仍为AMD A100，`PRISM_ALLOW_SUBMIT=0`。不能假定它已改为4090；
+  每次GPU提交明确配套设置`PRISM_GPU_PARTITION`及`PRISM_GPU_MODEL`，按实时调度选择。
+- 4090节点gpu045共8卡、当时8卡均已分配。AMD A100节点gpu056共8卡、0卡已分配，
+  但有其他用户的1卡reservation；因此是7张未分配且未被该预留占用的卡，不能宣称8卡
+  全部可用，也不能把整个节点误判为不可用。单卡PPO/生成调度试算均被接受。
+- Intel A100节点gpu003共8卡、5卡已分配；该分区单卡PPO调度试算被接受，但本项目
+  尚未用该节点验证Singularity与一致FP32 PPO，不因提交权限通过便直接放行正式计算。
+- CPU分区当时约20261核idle，用户CPU关联`GrpTRES=cpu=2560`；节点空闲总量不等于
+  本账号可同时使用量。AMD A100关联上限为8卡、提交任务上限50；按阶段窗口提交，
+  不一次堆积全部依赖任务。所有分区仍由Slurm执行账号及父级限制。
+- Reward 8CPU/12G、Design 16CPU/24G、导入/审计2CPU/3G、PPO单卡8CPU/64G和
+  生成单卡2CPU/16G均通过wrapper dry-run及调度试算。试算中的2030年等预测日期
+  显然不可靠，不能用作完成时间承诺。
+- 个人Lustre配额为1TiB/600000文件，实际约11.67GiB/58755文件；共享文件系统整体
+  剩余容量不替代个人配额。SIF哈希、48个活动依赖/packet哈希及本地/集群研究配置
+  核对通过；已部署6833940业务代码与当前v2一致，后续差异仅为文档。
+- 本账号最终`squeue`为空。212项完整回归1981224仍为COMPLETED/ExitCode0；本轮
+  没有新的GPU运行时验收，不把调度试算当作实机FP32验收。
+
+用户已授权合理利用尽可能多的计算资源。4–8卡只是耗时估算场景，不是并行硬上限；
+12个独立PPO单元可按实际账号限制、空闲GPU和阶段准备状态并行，不等待凑齐整批卡。
+每任务仍保持单进程单卡、已验收CPU/主存档位；不同分区分别提交，不占用他人预留，
+不增加重复实验。A100先通过短FP32数值验收，之后与其他已验收卡型共同提供并行能力。
 
 所有计算任务设置OMP/OpenBLAS/MKL线程数为`SLURM_CPUS_PER_TASK`，关闭tokenizer
 额外并行；不让每个Python进程自行用满节点全部核心。16线程优于32线程来自
@@ -104,6 +132,9 @@ rootless Apptainer此前失败。没有为V2重新下载容器或模型的必要
 ```bash
 source /online1/<用户路径>/prism/env.sh
 export PRISM_REPO=/online1/<用户路径>/prism/source-releases/<完整SHA>
+# 每次显式选定已验收卡型；下例是4090，不假定私有env的默认分区。
+export PRISM_GPU_PARTITION=q_intel_gpu_nvidia_4090_48g_share
+export PRISM_GPU_MODEL=4090
 cd "$PRISM_REPO"
 CFG=/online1/<用户路径>/prism/configs/v2.experiment.yaml
 bash scripts/yancheng/submit_v2.sh --dry-run policy \
