@@ -40,8 +40,7 @@ def _tasks(c, stage, method, budget, seed):
     role = "training" if stage == "label" else "evaluation"
     attempts = range(judge_settings(c, role)["max_attempts"])
     if stage == "label":
-        if c["sampling"]["budget_coupling"] != "independent":
-            raise ValueError("Local packets currently require independent budgets")
+        coupling = c["sampling"]["budget_coupling"]
         dependencies += [p / "pool.receipt.json", p / "design.receipt.json", out / "queries.receipt.json"]
         for path in dependencies[1:]:
             verify_receipt(path)
@@ -56,7 +55,7 @@ def _tasks(c, stage, method, budget, seed):
             a, b = pool[(q["prompt_index"], q["a"])], pool[(q["prompt_index"], q["b"])]
             calls = []
             for attempt in attempts:
-                s = training_call_seed(seed, method, budget, q["draw_id"], attempt, "independent")
+                s = training_call_seed(seed, method, budget, q["draw_id"], attempt, coupling)
                 calls.append({"seed": s, "flip": bool(np.random.default_rng(s).integers(2))})
             tasks.append({"id": str(q["draw_id"]), "messages": a["messages"], "left": a["response"], "right": b["response"], "calls": calls})
         log = out / "judge_calls.jsonl"
@@ -208,6 +207,14 @@ def run_packet(packet_path, results, *, execute=False, transport=None, workers=1
     results = Path(results)
     results.parent.mkdir(parents=True, exist_ok=True)
     completed, lock, stopped = 0, Lock(), Event()
+    def dispatch(task, attempt, retry=0):
+        call = task["calls"][attempt]
+        bound = transport.for_call(f"{packet['packet_id']}/{task['id']}/{attempt}/{retry}") if hasattr(transport, "for_call") else None
+        active = APIJudge(c, packet["role"], transport=bound) if bound is not None else judge
+        result = active.call(task["messages"], task["left"], task["right"], call["seed"], call["flip"])
+        if bound is not None:
+            result["budget_transport"] = bound.receipt
+        return result
     def run_one(task):
         nonlocal completed
         if stopped.is_set():
@@ -222,7 +229,7 @@ def run_packet(packet_path, results, *, execute=False, transport=None, workers=1
                 return
             call = task["calls"][attempt]
             try:
-                result = judge.call(task["messages"], task["left"], task["right"], call["seed"], call["flip"])
+                result = dispatch(task, attempt)
             except BaseException:
                 stopped.set()
                 raise
@@ -246,7 +253,7 @@ def run_packet(packet_path, results, *, execute=False, transport=None, workers=1
                 retry += 1
                 call = task["calls"][attempt]
                 try:
-                    result = judge.call(task["messages"], task["left"], task["right"], call["seed"], call["flip"])
+                    result = dispatch(task, attempt, retry)
                 except BaseException:
                     stopped.set()
                     raise
@@ -329,7 +336,7 @@ def import_results(c, packet_path, results):
                         reason="native_candidate_alias_or_transport_replay", decoder_revision="native_candidate_alias_v1")
         label(*args, judge_factory=factory)
         if packet.get("judge_protocol") == "preference_tool_enum_v4":
-            metadata = json.loads(marker.read_text())
+            metadata = json.loads(marker.read_text(encoding="utf-8"))
             metadata.update(accounting, decoder_revision="native_candidate_alias_v1", raw_api_result_path=str(Path(results).resolve()))
             metadata["input_sha256"].update({str(Path(packet_path).resolve()): digest(packet_path), str(Path(results).resolve()): digest(results)})
             dump(marker, metadata)

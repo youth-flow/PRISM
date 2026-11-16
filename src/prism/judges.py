@@ -208,6 +208,10 @@ class APIJudge:
         result = {"model": s["model"], "stream": False}
         if s["api"] == "responses":
             result.update(input=messages, max_output_tokens=s["max_output_tokens"], store=False)
+            if "service_tier" in s:
+                if s["service_tier"] not in ("default", "flex"):
+                    raise ValueError("Judge service_tier must be default or flex")
+                result["service_tier"] = s["service_tier"]
             if s.get("reasoning_effort") is not None:
                 result["reasoning"] = {"effort": s["reasoning_effort"]}
             # Reasoning models reject or ignore sampling controls. They are only
@@ -264,6 +268,7 @@ class APIJudge:
             if self.settings["api"] == "responses":
                 status = data.get("status")
                 result["response_status"] = status
+                result["service_tier"] = data.get("service_tier")
                 text = "".join(part.get("text", "")
                                for item in data.get("output", [])
                                if item.get("type") == "message" and item.get("role") == "assistant"

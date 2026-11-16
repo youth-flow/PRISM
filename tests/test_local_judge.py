@@ -10,6 +10,39 @@ from test_evaluation_v2 import config, save_generations
 from test_judges import preference_choice
 
 
+def test_nested_openai_packet_shared_prefix_with_budgeted_resume(tmp_path, monkeypatch):
+    from prism.api_budget import BudgetTransport, USDBudget
+    from prism.local_judge import _load_packet
+    c = config(tmp_path)
+    c["budgets"] = [4, 8]
+    c["sampling"]["budget_coupling"] = "nested_prefix"
+    c["judges"]["training"] = {**c["judges"]["evaluation"], "model": "gpt-6.1-sol"}
+    large = training_fixture(c)
+    small = cell(c,"prism",4,11)
+    write_rows(small/"queries.jsonl",rows(large/"queries.jsonl")[:4])
+    receipt(small/"queries.receipt.json",[small/"queries.jsonl",root(c)/"design.receipt.json"])
+    packet, result = tmp_path/"max.packet.json", tmp_path/"max.results.jsonl"
+    export_packet(c,"label","prism",8,11,packet)
+    tiny_packet=tmp_path/"prefix.packet.json"
+    export_packet(c,"label","prism",4,11,tiny_packet)
+    assert _load_packet(packet)["tasks"][:4] == _load_packet(tiny_packet)["tasks"]
+    sent=[]
+    def transport(*args):
+        sent.append(True)
+        return {"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"A"}]}],
+                "usage":{"input_tokens":9,"output_tokens":1}},"request-"+str(len(sent))
+    budget=USDBudget(tmp_path/"budget.sqlite",total_usd=1,purposes={"training":1})
+    monkeypatch.setenv("OPENAI_API_KEY","LOCAL_TEST_KEY")
+    run_packet(packet,result,execute=True,transport=BudgetTransport(budget,"training",transport),workers=3)
+    import_results(c,packet,result)
+    pipeline.label(c,"prism",4,11,judge_factory=lambda *args:pytest.fail("prefix must not make fresh API calls"))
+    assert rows(small/"labels.jsonl") == rows(large/"labels.jsonl")[:4]
+    assert len(sent)==8 and budget.snapshot()["training"]["dispatches"]==8
+    export_packet(c,"label","prism",4,11,tmp_path/"materialized.packet.json")
+    assert run_packet(tmp_path/"materialized.packet.json",tmp_path/"no_new.jsonl",execute=True,
+                      transport=lambda *args:pytest.fail("no duplicate spending"))["completed"]==4
+
+
 def fake_transport(url, payload, key, timeout):
     assert key == "LOCAL_TEST_KEY"
     if url.endswith("/responses"):

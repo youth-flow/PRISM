@@ -100,6 +100,8 @@ def _validate_judge(value, role):
         _number(judge.get("temperature"), f"{name}.temperature", strict=role == "training")
     elif judge.get("reasoning_effort") not in ("none", "low", "medium", "high", "xhigh", "max"):
         raise ValueError(f"{name}.reasoning_effort is not supported by the configured Responses adapter")
+    if "service_tier" in judge and (backend != "openai" or judge["service_tier"] not in ("default", "flex")):
+        raise ValueError(f"{name}.service_tier requires OpenAI default or flex")
 
 
 def _validate_structure(c):
