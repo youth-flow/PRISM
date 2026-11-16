@@ -1,4 +1,5 @@
 import json
+from urllib.error import HTTPError,URLError
 
 import pytest
 import yaml
@@ -81,3 +82,26 @@ def test_ledger_owner_lock_prevents_a_second_worker(tmp_path):
     with owner_lock(tmp_path/'owner.lock'):
         with pytest.raises(RuntimeError,match='Another Judge worker'):
             with owner_lock(tmp_path/'owner.lock'):pytest.fail('Second owner')
+
+
+@pytest.mark.parametrize('failure',[HTTPError('https://api.openai.com/v1/responses',429,'Flex capacity',{},None),URLError('temporary connection reset')])
+def test_transient_transport_failure_uses_frozen_retry_without_global_abort(tmp_path,monkeypatch,failure):
+    manifest,b,packet=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
+    from threading import Lock
+    lock=Lock();calls=[]
+    def transient(*args):
+        with lock:
+            calls.append(True);first=len(calls)==1
+        if first:raise failure
+        return response(*args)
+    result=run_manifest(manifest,execute=True,transport=transient,poll_seconds=.01)
+    records=rows(tmp_path/'train.results.jsonl')
+    assert result['state']=='completed' and not result['ledger']['paused']
+    assert len(calls)==9 and len(records)==9
+    failed=[r for r in records if r['result']['label'] is None]
+    assert len(failed)==1 and failed[0]['attempt']==0
+    task=failed[0]['task_id']
+    assert any(r['task_id']==task and r['attempt']==1 and r['result']['label'] is not None for r in records)
+    assert b.snapshot()['training']['dispatches']==9
+    assert b.snapshot()['training']['unresolved_reservations_usd']>0
+    run_manifest(manifest,execute=True,transport=lambda *args:pytest.fail('Never repeat completed requests'))

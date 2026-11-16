@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 from threading import Event
 import time
+from urllib.error import URLError
 
 import yaml
 
@@ -207,6 +208,11 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20):
                         attempt=int(identity.split('/')[-2])
                         if attempt:time.sleep(min(20,2**attempt))
                         try:return inner(url,payload,key,timeout)
+                        except (URLError,TimeoutError,ConnectionError):
+                            # APIJudge records ordinary transport/HTTP failures
+                            # and run_packet uses the remaining frozen attempts.
+                            # A recoverable request must not cancel other packets.
+                            raise
                         except BaseException:
                             abort.set();raise
                 return Bound()
