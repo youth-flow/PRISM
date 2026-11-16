@@ -17,6 +17,7 @@ import tempfile
 from threading import Lock, RLock
 import time
 from urllib.error import HTTPError, URLError
+from .judges import FlexCapacityUnavailable
 
 
 # USD / million tokens: ordinary, cache read, 30m write, 12h write, output.
@@ -44,6 +45,11 @@ def _flex_no_charge(payload,data):
     # Official Flex documentation explicitly excludes resource-unavailable
     # errors from billing. Unknown errors and absent/truncated bodies stay held.
     # https://developers.openai.com/api/docs/guides/flex-processing
+    if data.get('wire_service_tier',payload.get('service_tier'))!='flex':return False
+    if payload.get('service_tier')=='flex' and data.get('kind')=='prism_received_flex_capacity' and data.get('status')==200 and data.get('body_complete') is True:
+        try:
+            FlexCapacityUnavailable(base64.b64decode(data['body_base64'],validate=True));return True
+        except (ValueError,KeyError,TypeError):return False
     if (payload.get('service_tier')!='flex' or data.get('kind')!='prism_received_http_error'
             or data.get('status')!=429 or data.get('body_complete') is not True):return False
     try:
@@ -60,6 +66,9 @@ def _flex_no_charge(payload,data):
 
 
 def _replay_http_failure(url,data):
+    if data.get('kind')=='prism_received_flex_capacity':
+        error=FlexCapacityUnavailable(base64.b64decode(data['body_base64']))
+        error.request_id=data.get('headers',{}).get('x-request-id');raise error
     return HTTPError(url,data['status'],data['reason'],data['headers'],
                      io.BytesIO(base64.b64decode(data['body_base64'])))
 
@@ -445,7 +454,7 @@ class BudgetTransport:
                     cached=parent.budget.cached_response(identity,model,payload)
                     if cached is not None:
                         data,request_id=cached
-                        if data.get('kind')=='prism_received_http_error':
+                        if data.get('kind') in ('prism_received_http_error','prism_received_flex_capacity'):
                             known=_flex_no_charge(payload,data)
                             if known:parent.budget.complete_no_charge_http(identity,model,payload,data,request_id)
                             else:parent.budget.uncertain(identity)
@@ -463,8 +472,20 @@ class BudgetTransport:
                     self.receipt['request_transport']=evidence
                 try:
                     data, request_id = parent.transport(url,wire_payload,key,timeout)
+                except FlexCapacityUnavailable as exc:
+                    data={'kind':'prism_received_flex_capacity','status':200,'headers':{},'wire_service_tier':wire_payload.get('service_tier'),
+                          'body_base64':base64.b64encode(exc.encoded).decode('ascii'),'body_complete':True}
+                    request_id=getattr(exc,'request_id',None)
+                    if request_id:data['headers']['x-request-id']=request_id
+                    parent.budget.cache_response(identity,model,payload,data,request_id)
+                    if not _flex_no_charge(payload,data):
+                        parent.budget.uncertain(identity);raise ValueError('Capacity refusal for a non-Flex wire request') from None
+                    parent.budget.complete_no_charge_http(identity,model,payload,data,request_id)
+                    self.receipt.update(http_status=200,documented_no_charge=True,error_body_sha256=hashlib.sha256(exc.encoded).hexdigest())
+                    raise
                 except HTTPError as exc:
                     data=_http_failure(exc);request_id=data['headers'].get('x-request-id')
+                    data['wire_service_tier']=wire_payload.get('service_tier')
                     parent.budget.cache_response(identity,model,payload,data,request_id)
                     known=_flex_no_charge(payload,data)
                     if known:parent.budget.complete_no_charge_http(identity,model,payload,data,request_id)

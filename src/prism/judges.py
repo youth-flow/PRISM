@@ -4,6 +4,7 @@ The transport performs one request only. Stage code owns retries, append-only
 logging and spending accounting. Client seeds never claim API reproducibility.
 """
 import copy
+import base64
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -163,8 +164,32 @@ def request_json(url, payload, api_key, timeout):
                       headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
                       method="POST")
     with build_opener(_NoRedirect()).open(request, timeout=timeout) as response:
-        data = _read_response_events(response,deadline=deadline) if payload.get('stream') is True else json.load(response)
+        try:
+            data = _read_response_events(response,deadline=deadline) if payload.get('stream') is True else json.load(response)
+        except FlexCapacityUnavailable as exc:
+            exc.request_id=response.headers.get('x-request-id');raise
         return data, response.headers.get("x-request-id")
+
+
+class FlexCapacityUnavailable(ValueError):
+    """The complete native SSE refusal, preserved without a synthetic Response."""
+    def __init__(self,encoded):
+        if not isinstance(encoded,bytes) or len(encoded)>65536:raise ValueError('Invalid Flex error bytes')
+        def unique(pairs):
+            out={}
+            for key,value in pairs:
+                if key in out:raise ValueError('Duplicate Flex error key')
+                out[key]=value
+            return out
+        event=json.loads(encoded,object_pairs_hook=unique)
+        if not isinstance(event,dict) or set(event)-{'type','error','sequence_number'}:
+            raise ValueError('Unexpected Flex event fields')
+        error=event.get('error')
+        if (event.get('type')!='error' or not isinstance(error,dict)
+                or set(error)-{'type','code','headers','message','param'}
+                or error.get('type')!='resource_unavailable' or error.get('code')!='flex_unavailable'
+                or error.get('param') is not None):raise ValueError('Not a complete explicit Flex refusal')
+        self.encoded=encoded;super().__init__('Native Flex capacity refusal')
 
 
 def _read_response_events(response,*,deadline=None):
@@ -185,7 +210,11 @@ def _read_response_events(response,*,deadline=None):
         if encoded==b'[DONE]':raise URLError('Responses stream ended without a terminal Response')
         event=json.loads(encoded)
         if not isinstance(event,dict):raise ValueError('Malformed Responses event')
-        if event.get('type')=='error':raise ValueError('Responses stream reported an API error')
+        if event.get('type')=='error':
+            error=event.get('error',{})
+            if isinstance(error,dict) and error.get('type')=='resource_unavailable' and error.get('code')=='flex_unavailable':
+                raise FlexCapacityUnavailable(encoded)
+            raise ValueError('Responses stream reported an API error')
         terminal={'response.completed':'completed','response.incomplete':'incomplete','response.failed':'failed'}
         if event.get('type') not in terminal:continue
         data=event.get('response')
@@ -324,6 +353,11 @@ class APIJudge:
                 result["error"] = {"type": "incomplete_response"}
             elif result["label"] is None:
                 result["error"] = {"type": "invalid_judgment_format"}
+        except FlexCapacityUnavailable as exc:
+            result['error']={'type':'capacity_unavailable','retryable':True}
+            result['capacity_refusal']={'event_base64':base64.b64encode(exc.encoded).decode('ascii'),
+                                        'event_sha256':hashlib.sha256(exc.encoded).hexdigest()}
+            result['request_id']=getattr(exc,'request_id',None)
         except HTTPError as exc:
             result["request_id"] = exc.headers.get("x-request-id") if exc.headers else None
             result["error"] = {"type": "http_error", "status": int(exc.code),

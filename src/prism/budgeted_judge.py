@@ -21,7 +21,7 @@ import yaml
 
 from .api_budget import BudgetExceeded, BudgetTransport, DispatchPaused, USDBudget
 from .io import digest, dump, rows
-from .judges import APIJudge,_NoRedirect
+from .judges import APIJudge,_NoRedirect,FlexCapacityUnavailable
 from .local_judge import _load_packet, _openai_response_packet, _records, _transport_retry_protocol, NETWORK_RETRY_LIMIT, run_packet
 
 
@@ -70,7 +70,7 @@ def owner_lock(path):
         stream.close()
 
 
-def prepare_manifest(packets,profile,ledger,destination,workers=8,*,execution_authorization=None,service_tier='default'):
+def prepare_manifest(packets,profile,ledger,destination,workers=8,*,execution_authorization=None,service_tier='default',fallback_to_standard=False):
     """Bind existing packets; never create or reset a spending ledger."""
     if type(workers) is not int or not 1<=workers<=16:
         raise ValueError('Workers per packet must be in 1..16')
@@ -89,6 +89,7 @@ def prepare_manifest(packets,profile,ledger,destination,workers=8,*,execution_au
     if execution_authorization is not None:
         path=Path(execution_authorization).resolve()
         manifest['execution_authorization']={'path':str(path),'sha256':digest(path),'service_tier':service_tier}
+        if fallback_to_standard:manifest['execution_authorization']['fallback_to_standard']=True
     # Check all inputs without touching the ledger or credentials.
     _validate_manifest(manifest)
     dump(destination,manifest)
@@ -135,6 +136,8 @@ def _validate_manifest(m):
         evidence=m['execution_authorization'];grant=authorization(evidence['path'])
         if (digest(evidence['path'])!=evidence['sha256'] or roles!={'evaluation'}
                 or evidence['service_tier'] not in grant['transport_overrides']['allowed_service_tiers']
+                or type(evidence.get('fallback_to_standard',False)) is not bool
+                or (evidence.get('fallback_to_standard') and evidence['service_tier']!='flex')
                 or any(p['budget'] not in grant['active_budgets'] for _,p in loaded)
                 or profile['study_authorization']['original_experiment_sha256']!=grant['original_experiment_sha256']):
             raise ValueError('Invalid deadline delivery/budget authorization')
@@ -254,15 +257,18 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
     if type(stream_responses) is not bool or (stream_responses and not all(_openai_response_packet(p) for _,p in loaded)):
         raise ValueError('Streaming requires checked OpenAI Responses packets')
     standard=bool(m.get('execution_authorization') and m['execution_authorization']['service_tier']=='default')
+    prefer_flex=bool(m.get('execution_authorization',{}).get('fallback_to_standard'))
     if m.get('execution_authorization') and not stream_responses:
         raise ValueError('Deadline execution requires explicit SSE transport')
     with owner_lock(str(b.path)+'.worker.lock'):
         if b.state()['paused']:raise DispatchPaused('Ledger is paused; explicitly resume after approval')
         _recover(m,loaded,b)
         abort=Event();started=time.monotonic();network_failures=deque();network_lock=Lock();failures=[]
+        capacity_refusals=[]
+        fallback=BudgetTransport(b,loaded[0][1]['role'],transport,stream_responses=True,standard_processing=True) if prefer_flex else None
         class ManagedTransport(BudgetTransport):
             def for_call(self,identity):
-                inner=super().for_call(identity)
+                inner=fallback.for_call(identity) if prefer_flex and int(identity.split('/')[-2])>0 else super().for_call(identity)
                 class Bound:
                     @property
                     def receipt(self):return inner.receipt
@@ -276,6 +282,10 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
                         if attempt:time.sleep(min(20,2**attempt))
                         if abort.is_set():raise DispatchPaused('Another packet stopped; no new dispatch')
                         try:return inner(url,payload,key,timeout)
+                        except FlexCapacityUnavailable:
+                            if not prefer_flex:abort.set()
+                            with network_lock:capacity_refusals.append({'dispatch_id':identity,'timestamp_utc':datetime.now(timezone.utc).isoformat()})
+                            raise
                         except HTTPError as error:
                             self.remember(error)
                             if error.code!=429 and error.code<500:abort.set()
@@ -302,7 +312,8 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
                    'elapsed_seconds':time.monotonic()-started,'packets':_progress(loaded),'ledger':b.state(),
                    'network_retries_limit':network_retries,
                    'network_breaker':{'errors':2,'window_seconds':60},
-                   'responses_transport':'sse_standard_v1' if standard else 'sse_v1' if stream_responses else 'json',
+                   'responses_transport':'sse_flex_then_standard_v1' if prefer_flex else 'sse_standard_v1' if standard else 'sse_v1' if stream_responses else 'json',
+                   'capacity_refusals':list(capacity_refusals),
                    'execution_authorization':m.get('execution_authorization'),
                    'transport_failures':observed,
                    'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py','judges.py','evaluation_protocol.py','execution_authorization.py')},
