@@ -14,7 +14,8 @@
 """TRL 0.15.2 train loop with explicit PRISM FP32 probability checks.
 
 Changes from upstream: FP32 selected log-softmax; release consumed generation
-logits; unchanged-policy guard before every update; valid-token diagnostic means.
+logits; unchanged-policy guard before every update; valid-token diagnostic means;
+disable prompt-loader-end synchronization and audit each rollout's AdamW steps.
 PPO objectives, sampling law, GAE, batches, schedules and optimizer are retained.
 Upstream: https://github.com/huggingface/trl/blob/v0.15.2/trl/trainer/ppo_trainer.py
 """
