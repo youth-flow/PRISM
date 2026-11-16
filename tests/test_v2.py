@@ -121,3 +121,30 @@ def test_private_config_freeze_is_repeatable_and_never_overwrites_other_run(tmp_
     first=freeze_config(template,tmp_path/'assets-root',tmp_path/'run',destination)
     assert freeze_config(template,tmp_path/'assets-root',tmp_path/'run',destination)['sha256']==first['sha256']
     with pytest.raises(FileExistsError):freeze_config(template,tmp_path/'assets-root',tmp_path/'other-run',destination)
+
+
+def test_completed_frozen_prefix_can_train_while_larger_streams_are_pending(tmp_path,monkeypatch):
+    from prism.io import rows,write_rows,digest,verify_receipt
+    c,profile,data=prepared(tmp_path);monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
+    snapshot=tmp_path/'immutable-prefix';snapshot.mkdir()
+    for spec in data['packets']:
+        path=Path(spec['packet']);target=path.with_name(path.name.replace('.packet.json','.results.jsonl'))
+        run_packet(path,target,execute=True,transport=fake)
+        write_rows(snapshot/target.name,[r for r in rows(target) if int(r['task_id'])<2])
+    with pytest.raises(RuntimeError,match='stream incomplete'):materialize(c,profile,snapshot)
+    result=materialize(c,profile,snapshot,budgets=[2])
+    assert result['cells']==4 and result['training_valid_observations']==8 and not result['full_training_streams']
+    assert not list(root(c).glob('*/n4/seed*/labels.receipt.json'))
+    previous={}
+    for method in c['methods']:
+        for seed in c['seeds']:
+            pipeline.reward(c,method,2,seed);assert audit_reward(c,method,2,seed)['passed']
+            out=cell(c,method,2,seed)
+            previous[(method,seed)]=[digest(out/name) for name in ('labels.jsonl','labels.receipt.json','training.audit.receipt.json')]
+    assert materialize(c,profile,root(c)/'local_judge_packets')['full_training_streams']
+    for (method,seed),hashes in previous.items():
+        out=cell(c,method,2,seed)
+        assert hashes==[digest(out/name) for name in ('labels.jsonl','labels.receipt.json','training.audit.receipt.json')]
+        verify_receipt(out/'training.audit.receipt.json');assert gate(c,method,2,seed,'gate-policy')['passed']
+        pipeline.reward(c,method,4,seed);assert audit_reward(c,method,4,seed)['passed']
+    with pytest.raises(ValueError,match='frozen budget'):materialize(c,profile,snapshot,budgets=[3])

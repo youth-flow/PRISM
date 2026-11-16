@@ -129,9 +129,14 @@ python -X utf8 -m prism.budgeted_judge resume --ledger local/v2-api-budget.sqlit
 
 ## 离线导入与Reward
 
-上传完整原始结果到online1，CPU阶段`v2-materialize --results-dir ... --execute`
-先检查全部四条最大流完整，再导入并生成2048/4096/8192前缀。不会请求API，
-缺失结果不生成替代标签；最终写`v2.labels.audit.receipt.json`。
+上传已经冻结、带SHA256的原始结果快照到online1，CPU阶段
+`v2-materialize --results-dir ... --execute`默认要求四条最大流完整。可显式加
+`--budgets 2048`，先逐条核对四条已完成2048前缀，再启动该预算的四组Reward/PPO，
+同时继续原四条8192标注流；随后同理发布4096、8192。只接受原冻结预算，不修改
+config或重抽样、不对前缀额外标注。未齐备前缀不发布，缺失结果不替代。
+每个单元使用不可变`labels.materialize.audit.receipt.json`，后续更大前缀不改旧单元
+标签或训练审计依赖；后续快照必须与旧前缀逐项相符。总体状态写
+`v2.labels.audit.receipt.json`并明确本批实际预算/单元数，不将部分预算声称全量。
 
 12个单元分别运行`reward`，随后`v2-audit-reward --method ... --budget ...
 --seed ... --execute`。审计独立重放抽样、Judge seed/顺序、原始A/B方向、BT

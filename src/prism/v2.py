@@ -13,7 +13,7 @@ import yaml
 
 from .config import plan_summary
 from .io import cell, digest, dump, load_config, receipt, root, rows, verify_receipt
-from .local_judge import _execution_settings, _records, export_packet, import_results, validate_packet
+from .local_judge import _call_hash, _execution_settings, _hash, _records, export_packet, validate_packet
 from .judges import judge_settings
 
 
@@ -112,9 +112,13 @@ def sample_export(c,profile_path):
     return summary
 
 
-def materialize(c,profile_path,results_dir):
+def materialize(c,profile_path,results_dir,*,budgets=None):
     profile=execution_profile(c,profile_path);p=root(c);ready=[]
-    # Validate all max streams before publishing any smaller-budget snapshot.
+    requested=sorted(c['budgets'] if budgets is None else budgets)
+    if not requested or len(set(requested))!=len(requested) or any(n not in c['budgets'] for n in requested):
+        raise ValueError('Only explicitly frozen budget prefixes can be materialized')
+    # Validate all four requested prefixes before publishing any of this batch.
+    # Inputs are immutable uploaded snapshots, never a live local JSONL stream.
     for method in c['methods']:
         for seed in c['seeds']:
             path=p/'local_judge_packets'/f'{method}-n{max(c["budgets"])}-seed{seed}.packet.json'
@@ -122,20 +126,35 @@ def materialize(c,profile_path,results_dir):
             if packet['settings']!=profile['judges']['training']:raise ValueError('Wrong training Judge')
             result=Path(results_dir)/path.name.replace('.packet.json','.results.jsonl')
             _,indexed=_records(packet,result)
-            if not all(any(indexed.get((t['id'],a),{}).get('label') is not None for a in range(len(t['calls']))) for t in tasks):
+            if not all(any(indexed.get((t['id'],a),{}).get('label') is not None for a in range(len(t['calls']))) for t in tasks if int(t['id'])<max(requested)):
                 raise RuntimeError('Max-budget stream incomplete; no substituted/missing labels allowed')
-            ready.append((method,seed,path,result,packet))
+            ready.append((method,seed,path,result,packet,indexed))
     from .pipeline import label
-    def no_api(*args):raise AssertionError('Prefix materialization must make no API request')
     dependencies=[Path(profile_path).resolve()]
-    for method,seed,path,result,packet in ready:
-        import_results(c,path,result)
-        maximum=rows(cell(c,method,max(c['budgets']),seed)/'labels.jsonl')
+    for method,seed,path,result,packet,indexed in ready:
+        tasks={t['id']:t for t in packet['tasks']}
+        recorded={_call_hash(tasks[tid],tasks[tid]['calls'][a]):value for (tid,a),value in indexed.items()}
+        class Replay:
+            def call(self,messages,left,right,seed,flip):
+                key=_hash([messages,left,right,seed,flip])
+                if key not in recorded:raise RuntimeError('Frozen prefix missing; no API was called')
+                return dict(recorded[key])
         events=list(packet['prior_calls'])+rows(result)
-        for budget in sorted(c['budgets']):
-            label(c,method,budget,seed,judge_factory=no_api)
+        for budget in requested:
             out=cell(c,method,budget,seed)
-            if rows(out/'labels.jsonl')!=maximum[:budget]:raise ValueError('Labels do not match the observation prefix')
+            expected=[next(indexed[(str(k),a)] for a in range(len(tasks[str(k)]['calls'])) if indexed.get((str(k),a),{}).get('label') is not None) for k in range(budget)]
+            def same_labels(published):
+                return len(published)==budget and not any(any(value.get(k)!=observed.get(k) for k in ('label','raw','seed','flip','budget_transport','transport_retry')) for value,observed in zip(expected,published))
+            proof=out/'labels.materialize.audit.receipt.json'
+            if proof.exists():
+                verify_receipt(proof);verify_receipt(out/'labels.receipt.json')
+                if not same_labels(rows(out/'labels.jsonl')):raise ValueError('A later snapshot changed the original observation prefix')
+                _audit_openai_observations(c,method,budget,seed,rows(out/'labels.jsonl'),verify_receipt(out/'labels.receipt.json'))
+                dependencies.append(proof);continue
+            label(c,method,budget,seed,judge_factory=lambda *args:Replay())
+            published=rows(out/'labels.jsonl')
+            if not same_labels(published):
+                raise ValueError('Labels do not match the observation prefix')
             prefix=[event for event in events if int(event['task_id'])<budget]
             logical=len({(event['task_id'],event['attempt']) for event in prefix})
             canonical=len(rows(out/'judge_calls.jsonl'))
@@ -147,13 +166,17 @@ def materialize(c,profile_path,results_dir):
                             raw_api_result_path=str(result.resolve()),source_packet_path=str(path.resolve()))
             metadata['input_sha256'].update({str(result.resolve()):digest(result),str(path.resolve()):digest(path)})
             dump(marker,metadata)
-            dependencies.append(out/'labels.receipt.json')
+            audit=_audit_openai_observations(c,method,budget,seed,published,metadata)
+            dump(out/'labels.materialize.audit.json',{'passed':True,'method':method,'budget':budget,'seed':seed,'api_calls_sent':0,**audit})
+            receipt(proof,[out/'labels.materialize.audit.json',marker,Path(profile_path).resolve(),p/'design.receipt.json'])
+            dependencies.append(proof)
         stream=root(c)/'label_streams'/method/f'seed{seed}'/'judge_calls.jsonl'
         stream_marker=stream.parent/'labels.receipt.json'
         receipt(stream_marker,[stream,path,result],raw_api_result_path=str(result.resolve()),actual_judge_calls=len(events))
         dependencies.append(stream_marker)
         dependencies.extend([path,result])
-    summary={'passed':True,'training_valid_observations':plan_summary(c)['training_valid_labels'],'cells':plan_summary(c)['training_cells'],'api_calls_sent':0}
+    summary={'passed':True,'training_valid_observations':len(ready)*max(requested),'cells':len(ready)*len(requested),
+             'target_budgets':requested,'full_training_streams':max(requested)==max(c['budgets']),'api_calls_sent':0}
     dump(p/'v2.labels.audit.json',summary)
     receipt(p/'v2.labels.audit.receipt.json',dependencies+[p/'v2.labels.audit.json'])
     return summary
@@ -206,7 +229,7 @@ def _audit_openai_observations(c,method,budget,seed,labels,metadata):
 
 def audit_reward(c,method,budget,seed):
     p=root(c);out=cell(c,method,budget,seed)
-    verify_receipt(p/'v2.labels.audit.receipt.json')
+    verify_receipt(out/'labels.materialize.audit.receipt.json')
     for path in (p/'pool.receipt.json',p/'design.receipt.json',out/'queries.receipt.json',out/'labels.receipt.json',out/'reward.receipt.json'):
         verify_receipt(path)
     queries,labels=rows(out/'queries.jsonl'),rows(out/'labels.jsonl')
@@ -241,13 +264,13 @@ def audit_reward(c,method,budget,seed):
     summary={'passed':True,'method':method,'budget':budget,'seed':seed,'bt_loss':loss,'gradient_inf':g,
              'strong_convexity_objective_gap_bound':float(grad@grad/(2*ridge)) if ridge>0 else None,'audit_api_calls':0,**raw_audit}
     dump(out/'training.audit.json',summary)
-    receipt(out/'training.audit.receipt.json',[out/'training.audit.json',out/'reward.receipt.json',out/'labels.receipt.json',out/'queries.receipt.json',p/'design.receipt.json',p/'v2.labels.audit.receipt.json'])
+    receipt(out/'training.audit.receipt.json',[out/'training.audit.json',out/'reward.receipt.json',out/'labels.receipt.json',out/'queries.receipt.json',p/'design.receipt.json',out/'labels.materialize.audit.receipt.json'])
     return summary
 
 
 def gate(c,method,budget,seed,stage):
-    verify_receipt(root(c)/'v2.labels.audit.receipt.json')
     out=cell(c,method,budget,seed)
+    verify_receipt(out/'labels.materialize.audit.receipt.json')
     for name in ('labels','reward','training.audit'):
         verify_receipt(out/f'{name}.receipt.json')
     audit=json.loads((out/'training.audit.json').read_text(encoding='utf-8'))
@@ -267,6 +290,7 @@ def main():
     parser.add_argument('--config',default=str(Path(__file__).resolve().parents[2]/'configs/experiment.v2.yaml'))
     parser.add_argument('--profile',default=str(Path(__file__).resolve().parents[2]/'configs/judges.v2.yaml'))
     parser.add_argument('--results-dir');parser.add_argument('--method');parser.add_argument('--budget',type=int);parser.add_argument('--seed',type=int)
+    parser.add_argument('--budgets',type=int,nargs='+',help='Materialize only completed frozen prefixes; default requires every max stream')
     parser.add_argument('--asset-root');parser.add_argument('--run-root');parser.add_argument('--output-config')
     parser.add_argument('--execute',action='store_true')
     a=parser.parse_args()
@@ -280,7 +304,7 @@ def main():
         if a.action=='sample-export':result=sample_export(c,a.profile)
         elif a.action=='materialize':
             if not a.results_dir:parser.error('materialize requires --results-dir')
-            result=materialize(c,a.profile,a.results_dir)
+            result=materialize(c,a.profile,a.results_dir,budgets=a.budgets)
         elif a.action=='audit-reward':
             if any(x is None for x in (a.method,a.budget,a.seed)):parser.error('audit-reward needs a cell')
             result=audit_reward(c,a.method,a.budget,a.seed)
