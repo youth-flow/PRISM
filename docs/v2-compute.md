@@ -2,8 +2,9 @@
 
 本指南适用于盐城集群及`v2`分支。研究参数见`configs/experiment.v2.yaml`，
 最终有效Judge配置见`configs/judges.v2.yaml`。旧`docs/yancheng.md`保留历史记录；
-V2执行入口是`scripts/yancheng/submit_v2.sh`。当前用户要求先审阅工程与配置，
-正式实验/API保持暂停；下列运行命令供之后明确开始时使用。
+V2执行入口是`scripts/yancheng/submit_v2.sh`。用户已完成审阅并明确确认开始，
+最新六阶段状态与固定源码见[v2-progress.md](v2-progress.md)。既有env的提交开关
+仍保持0，仅对已检查的必要阶段单次授权；不重复执行已经完成的准备工作。
 
 ## 本机、登录节点、计算节点
 
@@ -23,9 +24,11 @@ V2执行入口是`scripts/yancheng/submit_v2.sh`。当前用户要求先审阅�
 - Slurm account：`sc001`；CPU分区：`q_amd_share`。
 - 已完成一致FP32 PPO短试的GPU分区：`q_intel_gpu_nvidia_4090_48g_share`，GRES=`gpu:tesla:1`。
   真实设备验收为RTX4090，可见显存约44.5GiB；FP32 PPO短试峰值约34.9GiB。
-- 已验证CUDA/模型/容器的另一分区：`q_amd_gpu_nvidia_A100_share`，对应`PRISM_GPU_MODEL=A100`。
-  A100尚未完成本轮一致FP32 PPO短试，开始后先验收再放行该卡型的正式PPO。
+- AMD A100分区：`q_amd_gpu_nvidia_A100_share`，对应`PRISM_GPU_MODEL=A100`。
+  1981930已通过一致FP32 PPO两轮/8 AdamW实机短验收。
   单独提交一个分区；站点此前拒绝过组合分区请求，V2 wrapper会阻止此用法。
+- Intel A100分区：`q_intel_gpu_nvidia_A100_share`，同样对应`PRISM_GPU_MODEL=A100`。
+  1981931已使用Singularity通过相同FP32短验收，原rootless失败记录保留。
 - CPU关联曾显示`GrpTRES=cpu=2560`，CPU节点显示128 CPU/193288MB。
   此为授权/配置快照，使用前查询当前状态，按实际所需核心提交。
 - 排除曾发生starter/Lustre停滞的`bn002,bn009`，日志和故障记录保留。
@@ -70,7 +73,10 @@ V2执行入口是`scripts/yancheng/submit_v2.sh`。当前用户要求先审阅�
 用户已授权合理利用尽可能多的计算资源。4–8卡只是耗时估算场景，不是并行硬上限；
 12个独立PPO单元可按实际账号限制、空闲GPU和阶段准备状态并行，不等待凑齐整批卡。
 每任务仍保持单进程单卡、已验收CPU/主存档位；不同分区分别提交，不占用他人预留，
-不增加重复实验。A100先通过短FP32数值验收，之后与其他已验收卡型共同提供并行能力。
+不增加重复实验。两类A100随后已通过1981930/31实机验收：各128诊断episodes、
+8次真实AdamW、224个有限FP32 LoRA张量/112 B更新，最大零更新approxKL约2.54e-11，
+显存34.885GiB。它们目前可与4090共同承接新Reward通过后的正式任务；短试实际
+分配约12.5分钟，完整4096 episodes暂按每组6–7小时估算，不能沿用4090耗时。
 
 所有计算任务设置OMP/OpenBLAS/MKL线程数为`SLURM_CPUS_PER_TASK`，关闭tokenizer
 额外并行；不让每个Python进程自行用满节点全部核心。16线程优于32线程来自

@@ -1,7 +1,7 @@
 # PRISM 工作约定
 
 - 默认使用 `main` 分支；用户另有明确要求时再调整。
-- 用户最新明确要求新建并使用`v2`分支整理工程，本任务在`v2`提交并`git push origin v2`，不再推送main；main保留8bce0a2。用户要求先完成工程/资源文档并汇报最终配置，然后再开始，当前正式实验和付费API必须暂停。只做代码验证与离线核对，不自动resume或提交正式训练/生成/Design任务。
+- 用户指定使用`v2`分支，本任务在`v2`提交并`git push origin v2`，不再推送main；main保留8bce0a2。工程/资源文档及最终配置审阅已完成，2026-11-16用户明确授权设定目标并开始冻结的六阶段V2，此前暂停要求已解除。可恢复同一账本和观察流、提交必要计算阶段；不自动开展冻结方案以外的额外实验或API任务。正常15–30分钟检查，异常和关键节点立即处理，阶段完成汇报正确性、任务块、耗时与展望。
 - 用户已授权：每个重要、可验收的工作节点，在完成相关检查后，主动将本任务的变更 `git add`、`git commit` 并普通推送当前用户指定分支（本任务`git push origin v2`），无需再次询问。
 - 提交前检查 diff 和工作区状态，只纳入本任务的相关变更；不提交密钥、模型权重、运行产物、虚拟环境或无关修改。
 - 使用普通 push，不擅自 force push 或覆盖远端历史。推送后核对本地与远端提交；失败时如实说明未同步状态。
@@ -59,3 +59,4 @@
 - v2工程业务源码6833940完整集群回归1981224已COMPLETED：212 passed/0 skipped，4CPU/6G/bn012/82秒/0GPU/0真实API，真实Tiny OLMo/TRL、AdamW实际步数和官方IFEval通过。首次662a589部署因站点Bash4.2空数组nounset于sbatch前退出，未产生Job，已修复并用公共submit_v2.sh验证。已SQLite backup与JSONL备份后离线恢复1条缺正文派发为response_unavailable，不造标签/不派HTTP；11776有效/11780派发全部对齐，quick_check ok，校准$1.694933+训练$12.233377，未知预留$0.345652保持，paused=true。新版入口prism.budgeted_judge及scripts/windows/run_v2_judge.ps1，当前manifest local/v2-review/training.manifest.json，禁止重建账本/启动旧worker。docs/v2-compute.md、v2-runbook.md、v2-readiness.md已完成；正式实验仍等用户后续开始，本任务仅在v2普通推送，main不动。
 - 2026-11-16 11:57–12:02最终集群只读核对及test-only通过：48个活动输入/packet哈希和SIF一致，CPU/单卡PPO/生成资源档均获调度接受，个人11.67GiB/1TiB、58755/600000文件，最终本人队列为空。实际私有env仍默认AMD A100，提交时明确配套partition/model；4090当时8卡全已分配，AMD A100有7张未分配且未被其他用户1卡reservation占用的卡，不能将整个节点视为不可用。A100一致FP32 PPO短试尚待用户确认开始后先验收；Intel A100仅提交权限通过，Singularity/FP32实机尚未验收。用户允许合规合理尽可能利用资源，4–8卡不是硬上限，12个独立单卡单元按实际授权和Slurm资源并行；不占他人预留，不在登录节点计算，不因资源授权自动开始实验/API。详见docs/v2-compute.md。
 - 用户现已明确授权开始并要求设定目标完成六阶段V2，覆盖此前暂停要求；正式任务按冻结配置继续，总API不超过40美元/账本停止线39不变。正常15–30分钟检查，异常、修复及阶段完成立即检查并阶段汇报正确性/任务块/耗时和展望，合理尽可能利用所有已授权且已验收资源。固定6833940已提交共享FP32 SFT1981932、AMD/Intel A100两轮诊断1981930/31；CPU1981929已独立通过12000候选token/EOS/特征与原q LU相对gap9.801458e-5，sample-export1981934通过四流/12前缀。本机恢复后296次请求产生295有效标签，累计12071；一次Flex429暴露budgeted_judge把可重试HTTP误判全局abort，已安全收完并暂停，未知预留不释放。正在按原3次尝试修正异常分类；专项21通过，完整集群回归通过后使用新不可变执行器续跑。不能将这些诊断或预先通过的Design当作完整V2/PPO完成。详见docs/v2-progress.md。
+- 修复388090e完整集群1981956已通过214项（95秒/4CPU/无真实API），原始流/SQLite备份及quick_check完成；本机12:27从同一manifest恢复，worker PID11076、launcher30804，日志local/v2-execution/training-388090e.*，status仍local/v2-review/training.manifest.status.json。原429 task2997在原第2尝试成功。AMD/Intel A100 1981930/31已COMPLETED/0（745/749秒），各128诊断episodes/2轮/8真实AdamW、224有限FP32 LoRA/112 B更新、2049 critic通过；两轮零更新approxKL<=2.54e-11、显存34.885GiB，35产物哈希本机复核通过。两类A100现均可承接正式PPO，粗估每4096 episodes 6–7小时；正式12单元仍待新Reward。共享SFT1981932继续，独立CPU审计1981967依赖其成功。已完成的旧Job若退出Slurm实时缓存不能再写afterok，须先核对成功与产物收据，依赖只列仍活动的必要前置。六阶段目标保持进行中，不因启动或短验收完成而结束。
