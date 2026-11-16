@@ -24,6 +24,23 @@ from .judges import APIJudge
 from .local_judge import _load_packet, _records, _transport_retry_protocol, NETWORK_RETRY_LIMIT, run_packet
 
 
+def _transport_error_metadata(error):
+    """Diagnostic types/codes only: exception strings may contain credentials."""
+    value={'exception_type':type(error).__name__}
+    reason=getattr(error,'reason',None)
+    if reason is not None:value['reason_type']=type(reason).__name__
+    cause=reason if isinstance(reason,BaseException) else error
+    for name in ('errno','winerror','verify_code'):
+        number=getattr(cause,name,None)
+        if type(number) is int:value[name]=number
+    # ssl exposes stable symbolic codes separately from sensitive error text.
+    for name in ('library','reason'):
+        code=getattr(cause,name,None)
+        if isinstance(code,str) and code and len(code)<=80 and all(ch.isupper() or ch.isdigit() or ch=='_' for ch in code):value['ssl_'+name]=code
+    if isinstance(error,HTTPError):value['http_status']=error.code
+    return value
+
+
 @contextmanager
 def owner_lock(path):
     """One execution/recovery process per ledger, including Windows."""
@@ -209,13 +226,17 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
     with owner_lock(str(b.path)+'.worker.lock'):
         if b.state()['paused']:raise DispatchPaused('Ledger is paused; explicitly resume after approval')
         _recover(m,loaded,b)
-        abort=Event();started=time.monotonic();network_failures=deque();network_lock=Lock()
+        abort=Event();started=time.monotonic();network_failures=deque();network_lock=Lock();failures=[]
         class ManagedTransport(BudgetTransport):
             def for_call(self,identity):
                 inner=super().for_call(identity)
                 class Bound:
                     @property
                     def receipt(self):return inner.receipt
+                    def remember(self,error):
+                        diagnostic=_transport_error_metadata(error)
+                        if inner.receipt is not None:inner.receipt['transport_failure']=diagnostic
+                        with network_lock:failures.append({'dispatch_id':identity,'timestamp_utc':datetime.now(timezone.utc).isoformat(),**diagnostic})
                     def __call__(self,url,payload,key,timeout):
                         if abort.is_set():raise DispatchPaused('Another packet stopped; no new dispatch')
                         attempt=int(identity.split('/')[-2])
@@ -223,9 +244,11 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
                         if abort.is_set():raise DispatchPaused('Another packet stopped; no new dispatch')
                         try:return inner(url,payload,key,timeout)
                         except HTTPError as error:
+                            self.remember(error)
                             if error.code!=429 and error.code<500:abort.set()
                             raise
-                        except (URLError,TimeoutError,ConnectionError):
+                        except (URLError,TimeoutError,ConnectionError) as error:
+                            self.remember(error)
                             # Isolated packet loss uses only the remaining
                             # original slots. Two losses in 60 seconds trip the
                             # shared breaker before a burst consumes all slots.
@@ -235,15 +258,18 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
                                 while network_failures[0]<now-60:network_failures.popleft()
                                 if len(network_failures)>=2:abort.set()
                             raise
-                        except BaseException:
+                        except BaseException as error:
+                            self.remember(error)
                             abort.set();raise
                 return Bound()
         role=loaded[0][1]['role'];managed=ManagedTransport(b,role,transport)
         def status(state,error=None):
+            with network_lock:observed=list(failures)
             value={'state':state,'pid':os.getpid(),'timestamp_utc':datetime.now(timezone.utc).isoformat(),
                    'elapsed_seconds':time.monotonic()-started,'packets':_progress(loaded),'ledger':b.state(),
                    'network_retries_limit':network_retries,
                    'network_breaker':{'errors':2,'window_seconds':60},
+                   'transport_failures':observed,
                    'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py')},
                    'error_type':type(error).__name__ if error else None}
             dump(m['status'],value)

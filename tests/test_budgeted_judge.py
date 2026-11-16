@@ -137,6 +137,18 @@ def test_isolated_packet_loss_keeps_original_semantic_slots_and_does_not_stop_ba
     assert result['state']=='completed' and len(sent)==9
     assert result['network_breaker']=={'errors':2,'window_seconds':60}
     assert not b.state()['paused'] and b.snapshot()['training']['unresolved_reservations_usd']>0
+    assert result['transport_failures'][0]['exception_type']=='URLError'
+    failed=next(r for r in rows(tmp_path/'train.results.jsonl') if r['result']['label'] is None)
+    assert failed['result']['budget_transport']['transport_failure']['exception_type']=='URLError'
+
+
+def test_transport_diagnostics_preserve_ssl_codes_without_exception_text():
+    import ssl
+    from prism.budgeted_judge import _transport_error_metadata
+    error=ssl.SSLEOFError(8,'SECRET_KEY must never enter logs')
+    value=_transport_error_metadata(URLError(error))
+    assert value['exception_type']=='URLError' and value['reason_type']=='SSLEOFError' and value['errno']==8
+    assert 'SECRET_KEY' not in json.dumps(value) and 'must never' not in json.dumps(value)
 
 
 def test_cached_final_slot_retransmission_recovers_without_another_request(tmp_path,monkeypatch):
