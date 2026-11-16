@@ -2,6 +2,7 @@
 import json
 
 import pytest
+import yaml
 
 from prism import pipeline
 from prism.io import cell, dump, receipt, root, rows, verify_receipt, write_rows
@@ -48,6 +49,43 @@ def fake_transport(url, payload, key, timeout):
     if url.endswith("/responses"):
         return {"status": "completed", "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "TIE"}]}], "usage": {"input_tokens": 9, "output_tokens": 1}}, "test-eval"
     return {"choices": [preference_choice()], "usage": {"prompt_tokens": 9, "completion_tokens": 1}}, "test-train"
+
+
+def test_evaluation_flex_profile_binds_transport_without_changing_study_or_labels(tmp_path,monkeypatch):
+    from prism.io import digest
+    c=config(tmp_path);save_generations(c)
+    before=digest(root(c)/'experiment.json')
+    profile=tmp_path/'judges.yaml'
+    effective={**c['judges']['evaluation'],'service_tier':'flex','timeout_seconds':900}
+    profile.write_text(yaml.safe_dump({'judges':{**c['judges'],'evaluation':effective}}),encoding='utf-8')
+    packet,result=tmp_path/'packet.json',tmp_path/'results.jsonl'
+    export_packet(c,'evaluate-judge','prism',8,11,packet,execution_profile=profile)
+    monkeypatch.setenv('OPENAI_API_KEY','LOCAL_TEST_KEY')
+    def transport(url,payload,key,timeout):
+        assert payload['service_tier']=='flex' and timeout==900
+        assert payload['reasoning']=={'effort':c['judges']['evaluation']['reasoning_effort']}
+        data,request_id=fake_transport(url,payload,key,timeout)
+        return {**data,'service_tier':'flex'},request_id
+    run_packet(packet,result,execute=True,transport=transport)
+    metrics=import_results(c,packet,result)
+    assert metrics['win_rate_vs_sft']==.5 and digest(root(c)/'experiment.json')==before
+    marker=verify_receipt(cell(c,'prism',8,11)/'evaluation.receipt.json')
+    assert marker['effective_judge_settings']==effective
+    assert marker['execution_overrides']=={'service_tier':'flex','timeout_seconds':900}
+    profile.write_text(profile.read_text()+'\n',encoding='utf-8')
+    with pytest.raises(ValueError,match='input changed'):
+        import_results(c,packet,result)
+
+
+def test_execution_profile_cannot_change_reasoning_or_training_judge(tmp_path):
+    c=config(tmp_path);save_generations(c)
+    profile=tmp_path/'judges.yaml'
+    profile.write_text(yaml.safe_dump({'judges':{'evaluation':{**c['judges']['evaluation'],'reasoning_effort':'high'}}}),encoding='utf-8')
+    with pytest.raises(ValueError,match='transport override'):
+        export_packet(c,'evaluate-judge','prism',8,11,tmp_path/'packet.json',execution_profile=profile)
+    training_fixture(c)
+    with pytest.raises(ValueError,match='transport override'):
+        export_packet(c,'label','prism',8,11,tmp_path/'training.json',evaluation_flex=True)
 
 
 def test_evaluation_packet_round_trip_resume_and_input_binding(tmp_path, monkeypatch):

@@ -13,6 +13,7 @@ import shutil
 from threading import Event, Lock
 
 import numpy as np
+import yaml
 
 from .io import cell, digest, dump, load_config, receipt, root, rows, verify_receipt
 from .judges import APIJudge, _parse, evaluation_call_seed, judge_protocol, judge_settings, normalize_preference_result, training_call_seed
@@ -81,7 +82,18 @@ def _tasks(c, stage, method, budget, seed):
     return role, tasks, dependencies, log, task_id
 
 
-def export_packet(c, stage, method, budget, seed, destination):
+def _execution_settings(settings, role, overrides):
+    if not overrides:
+        return settings
+    if (role!='evaluation' or settings['backend']!='openai'
+            or overrides!={'service_tier':'flex','timeout_seconds':900}):
+        raise ValueError('Only evaluation Flex/900s transport override is permitted')
+    return {**settings,**overrides}
+
+
+def export_packet(c, stage, method, budget, seed, destination, *, evaluation_flex=False, execution_profile=None):
+    if evaluation_flex and stage!='evaluate-judge':
+        raise ValueError('Flex transport override is restricted to evaluation packets')
     role, tasks, dependencies, log, task_id = _tasks(c, stage, method, budget, seed)
     prior = [{"task_id": task_id(r), "attempt": r["attempt"], "result": r} for r in (rows(log) if log.exists() else [])]
     packet = {"kind": "prism_local_judge", "version": 1, "stage": stage, "method": method, "budget": budget, "seed": seed,
@@ -89,6 +101,23 @@ def export_packet(c, stage, method, budget, seed, destination):
               "request_endpoint": APIJudge(c, role).url,
               "role": role, "settings": judge_settings(c, role), "config_sha256": _hash(c),
               "input_sha256": {str(p): digest(p) for p in dependencies}, "tasks": tasks, "prior_calls": prior}
+    if evaluation_flex:
+        packet['execution_overrides']={'service_tier':'flex','timeout_seconds':900}
+        packet['settings']=_execution_settings(packet['settings'],role,packet['execution_overrides'])
+    if execution_profile is not None:
+        if evaluation_flex:
+            raise ValueError('Use one execution profile source')
+        profile_path=Path(execution_profile).resolve()
+        profile=yaml.safe_load(profile_path.read_text(encoding='utf-8'))
+        effective=profile['judges'][role]
+        base=judge_settings(c,role)
+        overrides={k:v for k,v in effective.items() if base.get(k)!=v}
+        if _execution_settings(base,role,overrides)!=effective:
+            raise ValueError('Execution profile cannot alter scientific Judge settings')
+        if overrides:
+            packet['execution_overrides']=overrides
+        packet['settings']=effective
+        packet['input_sha256'][str(profile_path)]=digest(profile_path)
     packet["packet_id"] = _hash(packet)
     destination = Path(destination)
     if destination.exists():
@@ -113,6 +142,7 @@ def _load_packet(path):
     fallback = None if packet.get("judge_protocol") == "preference_tool_enum_v4" else expected_endpoint
     if packet.get("request_endpoint", fallback) != expected_endpoint:
         raise ValueError("Judge packet execution endpoint changed")
+    _execution_settings(packet['settings'],packet['role'],packet.get('execution_overrides'))
     return packet
 
 
@@ -284,7 +314,8 @@ def validate_packet(c, packet_path):
         if digest(path) != expected:
             raise ValueError("Judge packet input changed")
     role, tasks, _, _, _ = _tasks(c, packet["stage"], packet["method"], packet["budget"], packet["seed"])
-    if tasks != packet["tasks"] or judge_settings(c, role) != packet["settings"]:
+    settings=_execution_settings(judge_settings(c,role),role,packet.get('execution_overrides'))
+    if tasks != packet["tasks"] or settings != packet["settings"]:
         raise ValueError("Judge packet requests do not match the cluster experiment")
     return packet, tasks
 
@@ -342,7 +373,14 @@ def import_results(c, packet_path, results):
             dump(marker, metadata)
         return verify_receipt(marker)
     from .evaluation_v2 import evaluate_judge
-    return evaluate_judge(*args, judge_factory=factory)
+    result=evaluate_judge(*args, judge_factory=factory)
+    if packet.get('execution_overrides'):
+        marker=cell(*args)/'evaluation.receipt.json'
+        metadata=verify_receipt(marker)
+        metadata.update(effective_judge_settings=packet['settings'],execution_overrides=packet['execution_overrides'])
+        metadata['input_sha256'].update({str(Path(packet_path).resolve()):digest(packet_path),str(Path(results).resolve()):digest(results)})
+        dump(marker,metadata)
+    return result
 
 
 def main():
@@ -357,6 +395,8 @@ def main():
     parser.add_argument("--seed", type=int)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--evaluation-flex", action="store_true", help="Bind Flex/900s execution to evaluation packets without changing the frozen study")
+    parser.add_argument("--execution-profile", help="Hash-bind the frozen Judge execution profile to an exported packet")
     a = parser.parse_args()
     if a.action == "run":
         if not a.results:
@@ -369,7 +409,7 @@ def main():
         if a.action == "export":
             if any(v is None for v in (a.stage, a.method, a.budget, a.seed)):
                 parser.error("export requires --stage, --method, --budget, --seed")
-            result = export_packet(c, a.stage, a.method, a.budget, a.seed, a.packet)
+            result = export_packet(c, a.stage, a.method, a.budget, a.seed, a.packet,evaluation_flex=a.evaluation_flex,execution_profile=a.execution_profile)
         else:
             if not a.results:
                 parser.error("import requires --results")

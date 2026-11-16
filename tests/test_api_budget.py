@@ -87,11 +87,30 @@ def test_lowered_live_cap_applies_to_old_workers_and_preserves_uncertain_spend(t
     # The old object still holds its original $1 contract. Database enforcement
     # prevents a process from continuing at that stale limit before any HTTP.
     old.reserve('allowed','training','gpt-6.1-sol',payload)
-    with pytest.raises(sqlite3.IntegrityError,match='Live USD ceiling'):
+    with pytest.raises(BudgetExceeded,match='ceiling'):
         old.reserve('blocked','training','gpt-6.1-sol',payload)
+    # A pre-upgrade process doing a direct INSERT is independently constrained.
+    with old.transaction() as db:
+        with pytest.raises(sqlite3.IntegrityError,match='Live USD ceiling'):
+            db.execute("INSERT INTO dispatch VALUES ('old-code','training','gpt-6.1-sol','test',40000,NULL,'reserved',NULL,NULL)")
     assert old.snapshot()['training']['dispatches']==2
     assert old.snapshot()['training']['unresolved_reservations_usd']>before['training']['unresolved_reservations_usd']
     with pytest.raises(ValueError,match='only tighten'):
         fresh.tighten_limits(total_usd=.07,purposes={'training':.06},reason='No silent increases')
     with pytest.raises(BudgetExceeded,match='already charged/reserved'):
         fresh.tighten_limits(total_usd=.01,purposes={'training':.01},reason='Cannot erase spending')
+
+
+def test_purpose_reallocation_keeps_total_cap_and_pending_wait_semantics(tmp_path):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=1,purposes={'training':.8,'evaluation':.2})
+    b.tighten_limits(total_usd=.1,purposes={'training':.05,'evaluation':.05},reason='Lower total')
+    revised=b.reallocate_limits(purposes={'training':.08,'evaluation':.02},reason='User fixes counts; discounted evaluation')
+    assert revised=={'total':.1,'training':.08,'evaluation':.02}
+    payload={'model':'gpt-6.1-sol','max_output_tokens':1000,'input':[]}
+    for i in range(2):b.reserve(str(i),'training','gpt-6.1-sol',payload)
+    with pytest.raises(BudgetExceeded) as exc:b.reserve('waiting','training','gpt-6.1-sol',payload)
+    assert exc.value.waitable
+    for i in range(2):b.complete(str(i),'gpt-6.1-sol',{'usage':{'input_tokens':10,'output_tokens':2}},'test')
+    b.reserve('waiting','training','gpt-6.1-sol',payload)
+    with pytest.raises(ValueError,match='only tighten'):
+        b.tighten_limits(total_usd=.11,purposes={'training':.08,'evaluation':.02},reason='Must not raise total')

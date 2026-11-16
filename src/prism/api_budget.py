@@ -84,14 +84,29 @@ class USDBudget:
         SQLite triggers also constrain workers holding the old in-memory limits.
         Existing/unknown reservations remain charged against the new ceilings.
         """
+        return self._change_limits(total_usd,purposes,reason,reallocate=False)
+
+    def reallocate_limits(self, *, purposes, reason):
+        """Move purpose allocations after explicit approval; total cannot rise."""
+        with self.transaction() as db:
+            current=self._effective_limits(db)
+        return self._change_limits(current['total']/1e6,purposes,reason,reallocate=True)
+
+    def _effective_limits(self, db):
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_ceiling'").fetchone():
+            return dict(db.execute("SELECT purpose,amount FROM live_ceiling").fetchall()) or self.limits
+        return self.limits
+
+    def _change_limits(self,total_usd,purposes,reason,*,reallocate):
         requested={"total":micro_usd(total_usd),**{k:micro_usd(v) for k,v in purposes.items()}}
         if set(requested)!=set(self.limits) or any(v<=0 for v in requested.values()) or not reason.strip():
             raise ValueError("Specify every existing positive ceiling and an audit reason")
         with self.transaction() as db:
             db.execute("CREATE TABLE IF NOT EXISTS live_ceiling (purpose TEXT PRIMARY KEY, amount INTEGER NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS ceiling_change (id INTEGER PRIMARY KEY, changed_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, previous TEXT NOT NULL, revised TEXT NOT NULL, reason TEXT NOT NULL)")
-            current=dict(db.execute("SELECT purpose,amount FROM live_ceiling").fetchall()) or self.limits
-            if any(requested[k]>current[k] for k in requested):
+            current=self._effective_limits(db)
+            if (requested['total']>current['total'] or any(requested[k]>self.limits[k] for k in requested)
+                    or (not reallocate and any(requested[k]>current[k] for k in requested))):
                 raise ValueError("Live ceilings can only tighten; never reset spent amounts")
             usage={k:0 for k in requested}
             for purpose,amount in db.execute("SELECT purpose,SUM(COALESCE(charged,reserved)) FROM dispatch GROUP BY purpose"):
@@ -132,6 +147,7 @@ class USDBudget:
         fingerprint = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         amount = request_reservation(model, payload)
         with self.transaction() as db:
+            limits=self._effective_limits(db)
             prior = db.execute("SELECT purpose,model,payload_sha,reserved,charged,status,response,request_id FROM dispatch WHERE id=?", (identity,)).fetchone()
             if prior:
                 if prior[:3] != (purpose, model, fingerprint):
@@ -140,11 +156,11 @@ class USDBudget:
             total = db.execute("SELECT COALESCE(SUM(COALESCE(charged,reserved)),0) FROM dispatch").fetchone()[0]
             used = db.execute("SELECT COALESCE(SUM(COALESCE(charged,reserved)),0) FROM dispatch WHERE purpose=?",(purpose,)).fetchone()[0]
             underestimated = db.execute("SELECT COUNT(*) FROM dispatch WHERE charged>reserved").fetchone()[0]
-            if underestimated or total+amount > self.limits["total"] or used+amount > self.limits[purpose]:
+            if underestimated or total+amount > limits["total"] or used+amount > limits[purpose]:
                 active_total = db.execute("SELECT COALESCE(SUM(reserved),0) FROM dispatch WHERE status='reserved'").fetchone()[0]
                 active_used = db.execute("SELECT COALESCE(SUM(reserved),0) FROM dispatch WHERE status='reserved' AND purpose=?",(purpose,)).fetchone()[0]
-                waitable = (not underestimated and total-active_total+amount<=self.limits['total']
-                            and used-active_used+amount<=self.limits[purpose])
+                waitable = (not underestimated and total-active_total+amount<=limits['total']
+                            and used-active_used+amount<=limits[purpose])
                 raise BudgetExceeded("USD ceiling/reservations reached; no request was sent",waitable=waitable)
             db.execute("INSERT INTO dispatch VALUES (?,?,?,?,?,NULL,'reserved',NULL,NULL)", (identity,purpose,model,fingerprint,amount))
         return None
@@ -179,7 +195,7 @@ class BudgetTransport:
                 if url != "https://api.openai.com/v1/responses":
                     raise ValueError("Budgeted transport permits only the official Responses endpoint")
                 model = payload["model"]
-                deadline=time.monotonic()+min(timeout,60)
+                deadline=time.monotonic()+min(timeout,900)
                 while True:
                     try:
                         prior = parent.budget.reserve(identity,parent.purpose,model,payload)

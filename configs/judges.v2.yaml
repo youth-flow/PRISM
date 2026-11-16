@@ -1,0 +1,33 @@
+# Final execution settings. Existing training packets already match this training role.
+# Export evaluation packets with --execution-profile to bind Flex/900s.
+# The original experiment manifest and all research parameters remain immutable.
+schema_version: 1
+judges:
+  training:
+    backend: openai
+    model: gpt-6.1-sol
+    api: responses
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    reasoning_effort: high
+    service_tier: flex
+    max_output_tokens: 4096
+    max_attempts: 3
+    timeout_seconds: 900
+  evaluation:
+    backend: openai
+    model: gpt-6-luna
+    api: responses
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    reasoning_effort: medium
+    max_output_tokens: 4096
+    max_attempts: 3
+    timeout_seconds: 900
+    service_tier: flex
+spending_usd:
+  user_total: 40
+  operational_total: 39
+  calibration: 2
+  training: 35.5
+  evaluation: 1.8
