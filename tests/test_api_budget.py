@@ -1,7 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 import sqlite3
-from urllib.error import URLError
+import io
+import json
+from urllib.error import HTTPError,URLError
 
 import pytest
 
@@ -171,3 +173,55 @@ def test_pause_blocks_new_spending_but_preserves_cached_replay(tmp_path):
     assert b.snapshot()['training']['dispatches']==1
     b.control(False,'Explicit subsequent start')
     assert not b.state()['paused']
+
+
+def test_documented_flex_capacity_error_has_zero_charge_and_offline_error_replay(tmp_path):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=1,purposes={'training':1});sent=[]
+    body=b'{"error":{"code":"resource_unavailable","message":"Resource unavailable"}}'
+    payload={'model':'gpt-6.1-sol','service_tier':'flex','max_output_tokens':4096,'input':[]}
+    def unavailable(*args):
+        sent.append(True)
+        raise HTTPError(args[0],429,'Resource unavailable',{'x-request-id':'capacity-1'},io.BytesIO(body))
+    t=BudgetTransport(b,'training',unavailable)
+    for _ in range(2):
+        bound=t.for_call('same')
+        with pytest.raises(HTTPError) as error:bound('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)
+        assert error.value.code==429 and bound.receipt['documented_no_charge'] is True
+    assert len(sent)==1
+    assert b.snapshot()['training']=={'dispatches':1,'charged_usd_estimate':0,'unresolved_reservations_usd':0}
+    cached,_=b.cached_response('same','gpt-6.1-sol',payload)
+    import base64
+    assert base64.b64decode(cached['body_base64'])==body
+    assert 'usage' not in cached and 'output' not in cached
+
+
+@pytest.mark.parametrize('status,body,tier',[
+    (429,b'{"error":{"code":"rate_limit_exceeded"}}','flex'),
+    (429,b'{"error":{"code":"resource_unavailable"}}','default'),
+    (500,b'{"error":{"code":"resource_unavailable"}}','flex'),
+    (429,b'not-json','flex'),
+    (429,b'{"error":{"code":"resource_unavailable"},"usage":{"output_tokens":1}}','flex'),
+    (429,b'x'*65537,'flex'),
+    (429,b'{"error":{"code":"other","code":"resource_unavailable"}}','flex'),
+],ids=['rate-limit','wrong-tier','server-error','malformed-body','has-usage','oversized-body','duplicate-key'])
+def test_unproven_http_costs_remain_reserved(tmp_path,status,body,tier):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=1,purposes={'training':1})
+    payload={'model':'gpt-6.1-sol','service_tier':tier,'max_output_tokens':64,'input':[]}
+    def fail(*args):raise HTTPError(args[0],status,'error',{},io.BytesIO(body))
+    with pytest.raises(HTTPError):BudgetTransport(b,'training',fail).for_call('error')('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)
+    assert b.snapshot()['training']['unresolved_reservations_usd']>0
+
+
+def test_error_body_recovers_after_settlement_failure_without_redispatch(tmp_path,monkeypatch):
+    b=USDBudget(tmp_path/'budget.sqlite',total_usd=1,purposes={'training':1});sent=[]
+    payload={'model':'gpt-6.1-sol','service_tier':'flex','max_output_tokens':64,'input':[]}
+    def fail(*args):
+        sent.append(True)
+        raise HTTPError(args[0],429,'error',{},io.BytesIO(b'{"error":{"code":"resource_unavailable"}}'))
+    original=b.complete_no_charge_http
+    monkeypatch.setattr(b,'complete_no_charge_http',lambda *args:(_ for _ in ()).throw(sqlite3.OperationalError('locked')))
+    t=BudgetTransport(b,'training',fail)
+    with pytest.raises(sqlite3.OperationalError):t.for_call('error')('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)
+    monkeypatch.setattr(b,'complete_no_charge_http',original)
+    with pytest.raises(HTTPError):t.for_call('error')('https://api.openai.com/v1/responses',payload,'TEST_KEY',1)
+    assert len(sent)==1 and b.snapshot()['training']['unresolved_reservations_usd']==0

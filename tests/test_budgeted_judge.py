@@ -105,3 +105,22 @@ def test_transient_transport_failure_uses_frozen_retry_without_global_abort(tmp_
     assert b.snapshot()['training']['dispatches']==9
     assert b.snapshot()['training']['unresolved_reservations_usd']>0
     run_manifest(manifest,execute=True,transport=lambda *args:pytest.fail('Never repeat completed requests'))
+
+
+def test_cached_no_charge_error_recovers_as_failed_attempt_without_new_http(tmp_path,monkeypatch):
+    import io
+    manifest,b,path=prepared(tmp_path);packet=_load_packet(path);task=packet['tasks'][0];call=task['calls'][0]
+    monkeypatch.setenv('OPENAI_API_KEY','TEST_KEY')
+    def unavailable(*args):
+        raise HTTPError(args[0],429,'Resource unavailable',{'x-request-id':'capacity'},io.BytesIO(b'{"error":{"code":"resource_unavailable"}}'))
+    bound=BudgetTransport(b,'training',unavailable).for_call(f"{packet['packet_id']}/0/0/0")
+    judge=APIJudge({'execution':{'allow_paid_api_calls':True},'judges':{'training':packet['settings']}},'training',transport=bound)
+    assert judge.call(task['messages'],task['left'],task['right'],call['seed'],call['flip'])['label'] is None
+    b.control(True,'Recover received capacity error before continuing')
+    assert inspect_manifest(manifest)['recovery'][0]['cached_missing_jsonl']==1
+    recovered=recover_manifest(manifest)
+    assert recovered['http_requests_sent']==0 and recovered['recovered_records']==1
+    result=rows(tmp_path/'train.results.jsonl')[0]['result']
+    assert result['label'] is None and result['error']['status']==429
+    assert result['budget_transport']['documented_no_charge'] is True
+    assert b.snapshot()['training']['dispatches']==1 and b.snapshot()['training']['unresolved_reservations_usd']==0

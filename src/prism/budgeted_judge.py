@@ -135,8 +135,9 @@ def inspect_manifest(path):
         for spec,p in loaded:
             recorded={r['result'].get('budget_transport',{}).get('dispatch_id') for r in (rows(spec['results']) if Path(spec['results']).exists() else [])}
             known=db.execute('SELECT id,status FROM dispatch WHERE id LIKE ?',(p['packet_id']+'/%',)).fetchall()
-            reports.append({'packet_id':p['packet_id'],'cached_missing_jsonl':sum(i not in recorded and s=='completed' for i,s in known),
-                            'unresolved_missing_jsonl':sum(i not in recorded and s!='completed' for i,s in known)})
+            cached_states=('completed','failed_no_charge')
+            reports.append({'packet_id':p['packet_id'],'cached_missing_jsonl':sum(i not in recorded and s in cached_states for i,s in known),
+                            'unresolved_missing_jsonl':sum(i not in recorded and s not in cached_states for i,s in known)})
     return {'packets':_progress(loaded),'ledger':b.state(),'recovery':reports,'http_requests_sent':0}
 
 

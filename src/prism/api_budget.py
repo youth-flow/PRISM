@@ -6,7 +6,9 @@ Prices are an explicit snapshot, not a substitute for the provider invoice.
 """
 from contextlib import contextmanager
 from decimal import Decimal, ROUND_CEILING
+import base64
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -14,7 +16,7 @@ import sqlite3
 import tempfile
 from threading import Lock, RLock
 import time
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 
 # USD / million tokens: ordinary, cache read, 30m write, 12h write, output.
@@ -23,6 +25,43 @@ PRICES = {"gpt-6.1-sol": (2, .1, 2.5, 4, 10),
 PRICE_DATE = "2026-11-16"
 _LOCKS = {}
 _LOCKS_GUARD = Lock()
+
+
+def _http_failure(exc):
+    """Preserve the actual error body, never invent a model response or usage."""
+    try:
+        body=exc.read(65537)
+        complete=len(body)<=65536
+    except (OSError,ValueError):
+        body=b'';complete=False
+    headers={name:exc.headers.get(name) for name in ('x-request-id','content-type','retry-after')
+             if exc.headers and exc.headers.get(name) is not None}
+    return {'kind':'prism_received_http_error','status':int(exc.code),'reason':str(exc.reason),
+            'headers':headers,'body_base64':base64.b64encode(body).decode('ascii'),'body_complete':complete}
+
+
+def _flex_no_charge(payload,data):
+    # Official Flex documentation explicitly excludes resource-unavailable
+    # errors from billing. Unknown errors and absent/truncated bodies stay held.
+    # https://developers.openai.com/api/docs/guides/flex-processing
+    if (payload.get('service_tier')!='flex' or data.get('kind')!='prism_received_http_error'
+            or data.get('status')!=429 or data.get('body_complete') is not True):return False
+    try:
+        def unique(pairs):
+            result={}
+            for key,value in pairs:
+                if key in result:raise ValueError('Duplicate HTTP error key')
+                result[key]=value
+            return result
+        value=json.loads(base64.b64decode(data['body_base64'],validate=True),object_pairs_hook=unique)
+        return (isinstance(value,dict) and set(value)=={'error'} and isinstance(value['error'],dict)
+                and value['error'].get('code')=='resource_unavailable')
+    except (ValueError,KeyError,TypeError):return False
+
+
+def _replay_http_failure(url,data):
+    return HTTPError(url,data['status'],data['reason'],data['headers'],
+                     io.BytesIO(base64.b64decode(data['body_base64'])))
 
 
 def _path_lock(path):
@@ -271,6 +310,21 @@ class USDBudget:
             db.execute("UPDATE dispatch SET charged=?,status='completed',response=?,request_id=? WHERE id=?",
                        (amount,json.dumps(data,ensure_ascii=False),request_id,identity))
 
+    def complete_no_charge_http(self,identity,model,payload,data,request_id):
+        if not _flex_no_charge(payload,data):raise ValueError('No complete documented zero-charge Flex error')
+        if self.cached_response(identity,model,payload)!=(data,request_id):
+            raise ValueError('Preserve the actual received error before settlement')
+        fingerprint=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+        with self.transaction() as db:
+            prior=db.execute('SELECT model,payload_sha,charged,status,response FROM dispatch WHERE id=?',(identity,)).fetchone()
+            if prior is None or prior[:2]!=(model,fingerprint):raise ValueError('HTTP failure identity changed')
+            encoded=json.dumps(data,ensure_ascii=False)
+            if prior[2] is not None:
+                if prior[2:]!=(0,'failed_no_charge',encoded):raise ValueError('Never replace an existing settlement')
+                return
+            db.execute("UPDATE dispatch SET charged=0,status='failed_no_charge',response=?,request_id=? WHERE id=?",
+                       (encoded,request_id,identity))
+
     def uncertain(self, identity):
         with self.transaction() as db:
             db.execute("UPDATE dispatch SET status='uncertain' WHERE id=? AND status='reserved'",(identity,))
@@ -310,14 +364,36 @@ class BudgetTransport:
                 if prior:
                     if prior[5] == "completed":
                         return json.loads(prior[6]), prior[7]
+                    if prior[5] == 'failed_no_charge':
+                        data=json.loads(prior[6])
+                        if not _flex_no_charge(payload,data):raise ValueError('Invalid zero-charge HTTP settlement')
+                        self.receipt.update(http_status=data['status'],documented_no_charge=True,
+                                            error_body_sha256=hashlib.sha256(base64.b64decode(data['body_base64'])).hexdigest())
+                        raise _replay_http_failure(url,data)
                     cached=parent.budget.cached_response(identity,model,payload)
                     if cached is not None:
                         data,request_id=cached
+                        if data.get('kind')=='prism_received_http_error':
+                            known=_flex_no_charge(payload,data)
+                            if known:parent.budget.complete_no_charge_http(identity,model,payload,data,request_id)
+                            else:parent.budget.uncertain(identity)
+                            self.receipt.update(http_status=data['status'],documented_no_charge=known,
+                                                error_body_sha256=hashlib.sha256(base64.b64decode(data['body_base64'])).hexdigest())
+                            raise _replay_http_failure(url,data)
                         parent.budget.complete(identity,model,data,request_id)
                         return data,request_id
                     raise URLError("Earlier dispatch has uncertain billing; reservation retained, no redispatch")
                 try:
                     data, request_id = parent.transport(url,payload,key,timeout)
+                except HTTPError as exc:
+                    data=_http_failure(exc);request_id=data['headers'].get('x-request-id')
+                    parent.budget.cache_response(identity,model,payload,data,request_id)
+                    known=_flex_no_charge(payload,data)
+                    if known:parent.budget.complete_no_charge_http(identity,model,payload,data,request_id)
+                    else:parent.budget.uncertain(identity)
+                    self.receipt.update(http_status=data['status'],documented_no_charge=known,
+                                        error_body_sha256=hashlib.sha256(base64.b64decode(data['body_base64'])).hexdigest())
+                    raise
                 except BaseException:
                     try:parent.budget.uncertain(identity)
                     except sqlite3.OperationalError:pass  # Retain reserved amount; preserve the original failure.
