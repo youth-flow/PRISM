@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+import sqlite3
 from urllib.error import URLError
 
 import pytest
@@ -72,3 +73,25 @@ def test_flex_actual_tier_controls_cost_and_inflight_reservations_can_settle(tmp
     assert calls==['flex','flex']
     # Requesting Flex must not undercount an actual standard-tier response.
     assert b.snapshot()['training']['charged_usd_estimate']==.00008
+
+
+def test_lowered_live_cap_applies_to_old_workers_and_preserves_uncertain_spend(tmp_path):
+    path=tmp_path/'budget.sqlite'
+    old=USDBudget(path,total_usd=1,purposes={'training':1})
+    fresh=USDBudget(path,total_usd=1,purposes={'training':1})
+    payload={'model':'gpt-6.1-sol','max_output_tokens':1000,'input':[]}
+    old.reserve('unknown','training','gpt-6.1-sol',payload)
+    old.uncertain('unknown')
+    before=old.snapshot()
+    fresh.tighten_limits(total_usd=.06,purposes={'training':.06},reason='User lowers budget')
+    # The old object still holds its original $1 contract. Database enforcement
+    # prevents a process from continuing at that stale limit before any HTTP.
+    old.reserve('allowed','training','gpt-6.1-sol',payload)
+    with pytest.raises(sqlite3.IntegrityError,match='Live USD ceiling'):
+        old.reserve('blocked','training','gpt-6.1-sol',payload)
+    assert old.snapshot()['training']['dispatches']==2
+    assert old.snapshot()['training']['unresolved_reservations_usd']>before['training']['unresolved_reservations_usd']
+    with pytest.raises(ValueError,match='only tighten'):
+        fresh.tighten_limits(total_usd=.07,purposes={'training':.06},reason='No silent increases')
+    with pytest.raises(BudgetExceeded,match='already charged/reserved'):
+        fresh.tighten_limits(total_usd=.01,purposes={'training':.01},reason='Cannot erase spending')

@@ -78,6 +78,41 @@ class USDBudget:
                 raise ValueError("Budget/price contract changed; do not reset a live spending ledger")
             db.execute("INSERT OR IGNORE INTO contract VALUES (1,?)", (contract,))
 
+    def tighten_limits(self, *, total_usd, purposes, reason):
+        """Lower live ceilings without resetting responses or dispatch identity.
+
+        SQLite triggers also constrain workers holding the old in-memory limits.
+        Existing/unknown reservations remain charged against the new ceilings.
+        """
+        requested={"total":micro_usd(total_usd),**{k:micro_usd(v) for k,v in purposes.items()}}
+        if set(requested)!=set(self.limits) or any(v<=0 for v in requested.values()) or not reason.strip():
+            raise ValueError("Specify every existing positive ceiling and an audit reason")
+        with self.transaction() as db:
+            db.execute("CREATE TABLE IF NOT EXISTS live_ceiling (purpose TEXT PRIMARY KEY, amount INTEGER NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS ceiling_change (id INTEGER PRIMARY KEY, changed_utc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, previous TEXT NOT NULL, revised TEXT NOT NULL, reason TEXT NOT NULL)")
+            current=dict(db.execute("SELECT purpose,amount FROM live_ceiling").fetchall()) or self.limits
+            if any(requested[k]>current[k] for k in requested):
+                raise ValueError("Live ceilings can only tighten; never reset spent amounts")
+            usage={k:0 for k in requested}
+            for purpose,amount in db.execute("SELECT purpose,SUM(COALESCE(charged,reserved)) FROM dispatch GROUP BY purpose"):
+                usage[purpose]=amount;usage['total']+=amount
+            if any(usage[k]>requested[k] for k in requested):
+                raise BudgetExceeded("New ceiling is below already charged/reserved requests; no changes applied")
+            for purpose,amount in requested.items():
+                db.execute("INSERT OR REPLACE INTO live_ceiling VALUES (?,?)",(purpose,amount))
+            db.execute("INSERT INTO ceiling_change (previous,revised,reason) VALUES (?,?,?)",
+                       (json.dumps(current,sort_keys=True),json.dumps(requested,sort_keys=True),reason))
+            db.execute("""CREATE TRIGGER IF NOT EXISTS enforce_live_usd_ceiling
+                BEFORE INSERT ON dispatch BEGIN
+                SELECT CASE WHEN
+                    COALESCE((SELECT SUM(COALESCE(charged,reserved)) FROM dispatch),0)+NEW.reserved
+                        >(SELECT amount FROM live_ceiling WHERE purpose='total')
+                    OR COALESCE((SELECT SUM(COALESCE(charged,reserved)) FROM dispatch WHERE purpose=NEW.purpose),0)+NEW.reserved
+                        >(SELECT amount FROM live_ceiling WHERE purpose=NEW.purpose)
+                    THEN RAISE(ABORT,'Live USD ceiling reached; no request was sent') END;
+                END""")
+        return {k:v/1e6 for k,v in requested.items()}
+
     @contextmanager
     def transaction(self):
         db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
