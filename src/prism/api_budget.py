@@ -162,20 +162,20 @@ class USDBudget:
             current=self._effective_limits(db)
         return self._change_limits(current['total']/1e6,purposes,reason,reallocate=True)
 
-    def authorize_limits(self, *, total_usd, purposes, reason):
-        """Apply an explicitly authorized revision within the original total.
+    def authorize_limits(self, *, total_usd, purposes, reason, execution_authorization=None):
+        """Apply an explicit revision, using the pinned deadline grant if supplied.
 
         Historical contract, requests, usage and unknown reservations stay intact.
         This operator action requires drained, paused dispatch and blocked training.
         """
-        return self._change_limits(total_usd,purposes,reason,reallocate=True,authorized=True)
+        return self._change_limits(total_usd,purposes,reason,reallocate=True,authorized=True,execution_authorization=execution_authorization)
 
     def _effective_limits(self, db):
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_ceiling'").fetchone():
             return dict(db.execute("SELECT purpose,amount FROM live_ceiling").fetchall()) or self.limits
         return self.limits
 
-    def _change_limits(self,total_usd,purposes,reason,*,reallocate,authorized=False):
+    def _change_limits(self,total_usd,purposes,reason,*,reallocate,authorized=False,execution_authorization=None):
         requested={"total":micro_usd(total_usd),**{k:micro_usd(v) for k,v in purposes.items()}}
         if set(requested)!=set(self.limits) or any(v<=0 for v in requested.values()) or not reason.strip():
             raise ValueError("Specify every existing positive ceiling and an audit reason")
@@ -193,7 +193,14 @@ class USDBudget:
                     raise ValueError('Authorized revision requires paused dispatch and blocked training')
                 if db.execute("SELECT COUNT(*) FROM dispatch WHERE status='reserved'").fetchone()[0]:
                     raise ValueError('Drain in-flight dispatches before an authorized revision')
-                if requested['total']>self.limits['total'] or any(v>requested['total'] for v in requested.values()):
+                maximum=self.limits['total']
+                if execution_authorization is not None:
+                    from .execution_authorization import authorization
+                    granted=authorization(execution_authorization)['spending_usd']
+                    if requested!={"total":micro_usd(granted['operational_total']),**{k:micro_usd(granted[k]) for k in purposes}}:
+                        raise ValueError('Live ceilings must match the explicit deadline authorization')
+                    maximum=micro_usd(granted['operational_total'])
+                if requested['total']>maximum or any(v>requested['total'] for v in requested.values()):
                     raise ValueError('Authorized ceilings cannot exceed the original total contract')
             elif (requested['total']>current['total'] or any(requested[k]>self.limits[k] for k in requested)
                     or (not reallocate and any(requested[k]>current[k] for k in requested))):
@@ -312,9 +319,11 @@ class USDBudget:
         """Bind an explicit wire-only transport override, including on replay."""
         target=self.response_dir/(hashlib.sha256(identity.encode()).hexdigest()+'.transport.json')
         fingerprint=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
-        expected={'protocol':'responses_sse_v1','effective_payload_sha256':hashlib.sha256(json.dumps({**payload,'stream':True},ensure_ascii=False,sort_keys=True).encode()).hexdigest()}
+        from .execution_authorization import wire_evidence
+        def expected_for(evidence):
+            return wire_evidence(payload,standard=evidence.get('protocol')=='responses_sse_standard_v1')[1]
         if record is not None:
-            if record!=expected:raise ValueError('Invalid streaming request transport')
+            if record!=expected_for(record):raise ValueError('Invalid streaming request transport')
             value={'identity':identity,'model':model,'payload_sha':fingerprint,'transport':record}
             if not target.exists():
                 self.response_dir.mkdir(parents=True,exist_ok=True);temporary=None
@@ -327,7 +336,7 @@ class USDBudget:
         if not target.exists():return None
         value=json.loads(target.read_text(encoding='utf-8'))
         if ((value['identity'],value['model'],value['payload_sha'])!=(identity,model,fingerprint)
-                or value['transport']!=expected):raise ValueError('Stored streaming transport identity changed')
+                or value['transport']!=expected_for(value['transport'])):raise ValueError('Stored streaming transport identity changed')
         return value['transport']
 
     def reserve(self, identity, purpose, model, payload):
@@ -393,11 +402,14 @@ class USDBudget:
 
 
 class BudgetTransport:
-    def __init__(self, budget, purpose, transport=None,*,stream_responses=False):
+    def __init__(self, budget, purpose, transport=None,*,stream_responses=False,standard_processing=False):
         from .judges import request_json
         if type(stream_responses) is not bool:raise ValueError('Streaming flag must be boolean')
         self.budget, self.purpose, self.transport = budget, purpose, transport or request_json
         self.stream_responses=stream_responses
+        if type(standard_processing) is not bool or (standard_processing and (purpose!='evaluation' or not stream_responses)):
+            raise ValueError('Authorized standard processing requires evaluation SSE execution')
+        self.standard_processing=standard_processing
 
     def for_call(self, identity):
         parent = self
@@ -445,8 +457,8 @@ class BudgetTransport:
                     raise URLError("Earlier dispatch has uncertain billing; reservation retained, no redispatch")
                 wire_payload=payload
                 if parent.stream_responses:
-                    wire_payload={**payload,'stream':True}
-                    evidence={'protocol':'responses_sse_v1','effective_payload_sha256':hashlib.sha256(json.dumps(wire_payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()}
+                    from .execution_authorization import wire_evidence
+                    wire_payload,evidence=wire_evidence(payload,standard=parent.standard_processing)
                     parent.budget.request_transport(identity,model,payload,record=evidence)
                     self.receipt['request_transport']=evidence
                 try:

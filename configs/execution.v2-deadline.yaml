@@ -1,0 +1,18 @@
+kind: prism_v2_deadline_execution
+version: 1
+authorization: user_sets_evaluation_cap_30_and_requests_completion_before_0700
+authorized_at: '2026-11-16T23:10:00+08:00'
+deadline_target: '2026-11-17T07:00:00+08:00'
+reason: User subsequently caps the remaining evaluation campaign at USD30 and requests completion before 07:00; schedule standard or Flex processing for the same Judges without changing tasks or semantic attempts.
+original_experiment_sha256: 65c883a9e156176e32f4ec210e449865848725ded4d454496edeafa579003af8
+active_budgets: [2048, 4096]
+cancelled_budgets: [8192]
+transport_overrides:
+  stream: true
+  allowed_service_tiers: [default, flex]
+spending_usd:
+  operational_total: 63
+  calibration: 2
+  training: 31
+  evaluation: 30
+spending_scope: The USD30 evaluation cap includes the already issued evaluation requests, unknown evaluation reservations, primary Sol and secondary Luna. The USD63 cumulative guard also preserves all historical calibration, training charges and unknown reservations; it does not authorize new training. Stop when 12000 primary and 2400 crosscheck tasks finish.

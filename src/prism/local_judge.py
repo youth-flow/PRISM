@@ -46,7 +46,10 @@ def _validate_request_transport(packet,task,call,result):
     judge=APIJudge({'judges':{packet['role']:packet['settings']}},packet['role'])
     left,right=(task['right'],task['left']) if call['flip'] else (task['left'],task['right'])
     payload=judge._payload(_messages(task['messages'],left,right,packet['role'],protocol=packet['judge_protocol']))
-    expected={'protocol':'responses_sse_v1','effective_payload_sha256':hashlib.sha256(json.dumps({**payload,'stream':True},ensure_ascii=False,sort_keys=True).encode()).hexdigest()}
+    from .execution_authorization import wire_evidence
+    standard=evidence.get('protocol')=='responses_sse_standard_v1'
+    if standard and packet['role']!='evaluation':raise ValueError('Standard delivery revision is evaluation-only')
+    expected=wire_evidence(payload,standard=standard)[1]
     if evidence!=expected:raise ValueError('Effective streaming request payload changed')
 
 

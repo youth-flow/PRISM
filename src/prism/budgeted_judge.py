@@ -70,7 +70,7 @@ def owner_lock(path):
         stream.close()
 
 
-def prepare_manifest(packets,profile,ledger,destination,workers=8):
+def prepare_manifest(packets,profile,ledger,destination,workers=8,*,execution_authorization=None,service_tier='default'):
     """Bind existing packets; never create or reset a spending ledger."""
     if type(workers) is not int or not 1<=workers<=16:
         raise ValueError('Workers per packet must be in 1..16')
@@ -86,6 +86,9 @@ def prepare_manifest(packets,profile,ledger,destination,workers=8):
               'profile_sha256':digest(profile),'ledger':str(Path(ledger).resolve()),'packets':specs,
               'workers_per_packet':workers,'max_total_workers':32,
               'status':str(destination.with_suffix('.status.json'))}
+    if execution_authorization is not None:
+        path=Path(execution_authorization).resolve()
+        manifest['execution_authorization']={'path':str(path),'sha256':digest(path),'service_tier':service_tier}
     # Check all inputs without touching the ledger or credentials.
     _validate_manifest(manifest)
     dump(destination,manifest)
@@ -127,6 +130,15 @@ def _validate_manifest(m):
         loaded.append((spec,p))
     if not loaded or len(roles)!=1:raise ValueError('Use one nonempty training or evaluation batch')
     if revised and roles!={'evaluation'}:raise ValueError('Revised profile is evaluation-only; training remains blocked')
+    if m.get('execution_authorization'):
+        from .execution_authorization import authorization
+        evidence=m['execution_authorization'];grant=authorization(evidence['path'])
+        if (digest(evidence['path'])!=evidence['sha256'] or roles!={'evaluation'}
+                or evidence['service_tier'] not in grant['transport_overrides']['allowed_service_tiers']
+                or any(p['budget'] not in grant['active_budgets'] for _,p in loaded)
+                or profile['study_authorization']['original_experiment_sha256']!=grant['original_experiment_sha256']):
+            raise ValueError('Invalid deadline delivery/budget authorization')
+        profile={**profile,'spending_usd':grant['spending_usd'],'deadline_execution':grant}
     return profile,loaded
 
 
@@ -141,7 +153,7 @@ def _ledger(m,profile):
     expected={'total':money['operational_total'],**{k:money[k] for k in ('calibration','training','evaluation')}}
     if any(state['limits_usd'].get(k,float('inf'))>v for k,v in expected.items()):
         raise ValueError('Existing live USD ceilings exceed the final profile; explicitly lower/reallocate first')
-    if profile.get('spending_authorization'):
+    if profile.get('spending_authorization') or profile.get('deadline_execution'):
         with b.transaction() as db:
             paused=db.execute("SELECT paused FROM purpose_dispatch_control WHERE purpose='training'").fetchone()
         if not paused or not paused[0]:raise ValueError('Training must remain blocked under the evaluation revision')
@@ -241,6 +253,9 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
         raise ValueError('Network retransmissions are restricted to checked training packets')
     if type(stream_responses) is not bool or (stream_responses and not all(_openai_response_packet(p) for _,p in loaded)):
         raise ValueError('Streaming requires checked OpenAI Responses packets')
+    standard=bool(m.get('execution_authorization') and m['execution_authorization']['service_tier']=='default')
+    if m.get('execution_authorization') and not stream_responses:
+        raise ValueError('Deadline execution requires explicit SSE transport')
     with owner_lock(str(b.path)+'.worker.lock'):
         if b.state()['paused']:raise DispatchPaused('Ledger is paused; explicitly resume after approval')
         _recover(m,loaded,b)
@@ -280,16 +295,17 @@ def run_manifest(path,*,execute=False,transport=None,poll_seconds=20,network_ret
                             self.remember(error)
                             abort.set();raise
                 return Bound()
-        role=loaded[0][1]['role'];managed=ManagedTransport(b,role,transport,stream_responses=stream_responses)
+        role=loaded[0][1]['role'];managed=ManagedTransport(b,role,transport,stream_responses=stream_responses,standard_processing=standard)
         def status(state,error=None):
             with network_lock:observed=list(failures)
             value={'state':state,'pid':os.getpid(),'timestamp_utc':datetime.now(timezone.utc).isoformat(),
                    'elapsed_seconds':time.monotonic()-started,'packets':_progress(loaded),'ledger':b.state(),
                    'network_retries_limit':network_retries,
                    'network_breaker':{'errors':2,'window_seconds':60},
-                   'responses_transport':'sse_v1' if stream_responses else 'json',
+                   'responses_transport':'sse_standard_v1' if standard else 'sse_v1' if stream_responses else 'json',
+                   'execution_authorization':m.get('execution_authorization'),
                    'transport_failures':observed,
-                   'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py','judges.py','evaluation_protocol.py')},
+                   'code_sha256':{f:digest(Path(__file__).with_name(f)) for f in ('budgeted_judge.py','api_budget.py','local_judge.py','judges.py','evaluation_protocol.py','execution_authorization.py')},
                    'error_type':type(error).__name__ if error else None}
             dump(m['status'],value)
             return value
