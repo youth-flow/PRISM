@@ -10,7 +10,8 @@ GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "e
 STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-data", "extract-features",
           "merge-features", "geometry", "geometry-audit", "design", "design-report", "freeze-study", "sample", "reward",
           "prepare-shared", "merge-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
-          "judge-export", "judge-import", "aggregate", "audit", "model-smoke", "shared-smoke", "audit-training")
+          "judge-export", "judge-import", "aggregate", "audit", "model-smoke", "shared-smoke", "audit-training",
+          "full-pool-reward", "full-pool-reward-report")
 
 
 def stage_resource(stage):
@@ -30,6 +31,7 @@ def main(argv=None):
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shards", type=int)
     parser.add_argument("--design-lambda", type=float)
+    parser.add_argument("--reward-l2", type=float)
     parser.add_argument("--budget", type=int)
     parser.add_argument("--user-budget-confirmed", action="store_true", help="Record the user's N decision after reviewing Design")
     parser.add_argument("--stop-after-episodes", type=int)
@@ -102,6 +104,14 @@ def main(argv=None):
         elif args.stage == "audit-training":
             from .training_audit import audit_training
             value = audit_training(c)
+        elif args.stage == "full-pool-reward":
+            if args.reward_l2 is None:
+                parser.error("full-pool-reward requires --reward-l2 from the original grid")
+            from .full_pool_reward import fit_full_pool_candidate
+            value = fit_full_pool_candidate(c, args.reward_l2)
+        elif args.stage == "full-pool-reward-report":
+            from .full_pool_reward import summarize_full_pool
+            value = summarize_full_pool(c)
         elif args.stage == "prepare-shared":
             if args.shards is None:
                 from .ppo import prepare_shared

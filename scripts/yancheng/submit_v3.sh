@@ -13,7 +13,7 @@ case "$stage" in
   download-data) cpus=4; memory=6G; duration=04:00:00 ;;
   prepare-data|geometry|geometry-audit|design|freeze-study|audit) cpus=16; memory=24G; duration=12:00:00 ;;
   merge-features) cpus=8; memory=12G; duration=04:00:00 ;;
-  reward|audit-training) cpus=8; memory=12G; duration=04:00:00 ;;
+  reward|audit-training|full-pool-reward|full-pool-reward-report) cpus=8; memory=12G; duration=04:00:00 ;;
   cpu-smoke) cpus=4; memory=6G; duration=01:00:00 ;;
   validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate) ;;
   *) prism_die "Unsupported V3 compute stage; paid Judges run locally: $stage" ;;
