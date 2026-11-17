@@ -18,6 +18,13 @@ from prism.v3.evaluation import (METHODS, aggregate, evaluate_generate, export_j
                                  run_local, score_comparison)
 
 
+@pytest.fixture(autouse=True)
+def local_judge_environment(monkeypatch):
+    # These tests simulate the laptop with fake HTTP even when pytest itself
+    # runs in Slurm. The cluster-rejection test explicitly restores a job id.
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+
+
 def fixture(tmp_path, count=3, service_tier="default"):
     c = yaml.safe_load((Path(__file__).parents[1]/"configs/experiment.v3.yaml").read_text(encoding="utf-8"))
     c["output"] = str(tmp_path/"run")
