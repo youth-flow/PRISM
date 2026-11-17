@@ -4,6 +4,8 @@
 
 我的判断是：本次完成了经过独立验收的实验，但尚未显示 PRISM 优于 Empirical；两方法相对 SFT 的 RLHF 增益也弱。下一步最有价值的是识别“设计几何→Reward 泛化→策略优化”的哪一环没有把信息优势传递下去。
 
+后续已针对 Empirical 补齐只读 Reward 泛化和固定回答自身 Reward 诊断，见[Reward/PPO 定位报告](v2-empirical-reward-ppo-diagnosis-2026-11-17.md)。下文初次分析中的证据缺口，以该补充报告的新测量为准。
+
 ## 主结果应如何理解
 
 | 预算 | 方法 | 对 SFT 胜率（两 seed 均值） | IFEval strict | 序列 KL MC |
