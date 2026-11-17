@@ -360,3 +360,12 @@ Adam beta=.9/.999、epsilon1e-8，3% warmup后余弦降到10%，显式梯度范�
 最终独立重算四节点开发指标及选中checkpoint的完整训练集表现。
 它们沿用共同的完整训练学习率日程，属于连续学习曲线，不等于四档分别优化的预算实验。
 PPO仍暂停，不更改正式PRISM头/分布/定标，不调用API。
+
+正式执行固定源244d064：1987569生产SIF为405 passed，1987572 fresh-head/micro4最长
+真实样本验收通过，显存15.395GiB、基座hash未变、初始EOS分数最大误差1.1452e-5；
+1987576于21:13:41在gpu045正式RUNNING，单4090/8CPU/48G，尚未完成全量。
+独立评价在`prism.v3.lora_reward_evaluation`：各checkpoint只对它实际已见的shuffle前缀
+报告训练准确率，并对同一2048开发集评价。初始checkpoint的训练准确率为null（未见标签）；
+不把早期选中checkpoint的全159682池表现冒称已训练样本表现。复核真实Adam步数、有限性、
+冻结基座、checkpoint哈希、逐id覆盖和独立BT指标，评价可以分片使用所有可用普通GPU，
+运行中的训练源码/日程/参数不改。用户指定稳定后每30min检查，异常及关键checkpoint即时处理。

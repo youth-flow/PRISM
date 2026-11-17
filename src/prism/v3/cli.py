@@ -125,8 +125,9 @@ def main(argv=None):
             else:
                 if args.shards is None:
                     parser.error(f"{args.stage} requires --shards")
-                value = (lora_reward.score(c, args.shard_index, args.shards) if args.stage == "lora-reward-score"
-                         else lora_reward.summarize(c, args.shards))
+                from . import lora_reward_evaluation
+                value = (lora_reward_evaluation.score(c, args.shard_index, args.shards) if args.stage == "lora-reward-score"
+                         else lora_reward_evaluation.summarize(c, args.shards))
         elif args.stage == "prepare-shared":
             if args.shards is None:
                 from .ppo import prepare_shared
