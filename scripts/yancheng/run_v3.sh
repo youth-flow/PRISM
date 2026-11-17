@@ -65,7 +65,7 @@ if [[ "$PRISM_STAGE_RESOURCE" == gpu ]]; then
 fi
 cli=("$@")
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
-  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared ]] || prism_die "Unexpected V3 array stage"
+  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score ]] || prism_die "Unexpected V3 array stage"
   cli+=(--shard-index "$SLURM_ARRAY_TASK_ID")
 fi
 "${runner[@]}" python -m prism.v3 "$stage" "${cli[@]}"

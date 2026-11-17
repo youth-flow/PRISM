@@ -306,3 +306,29 @@ receipt SHA256=9f267b6bf342de90d8949ecd924810ac9d19404749bf3cc0a7ed404752353e17�
 合计0.903333分配CPU核时、0 GPU卡时、0 API请求/费用。20:15核对本人队列为空。
 未修改backbone、未将全池头替换正式头、PPO admission保持false。
 操作入口见[v3-runbook.md](v3-runbook.md)。
+
+### 全池 LoRA Reward 独立诊断（2026-11-17 用户授权）
+
+在既有159682训练对上微调奖励表征，仍用同一2048对开发集。
+开发集来自HH官方test，排除全部train上下文和已抽出的最终评价500/PPO开发512上下文后，
+按来源比例、唯一上下文、seed13抽取。开发集参与选正则/checkpoint，不能当作未调参测试集。
+最终500题不参与这个诊断。
+
+实现为`prism.v3.lora_reward`，产物独立保存在`diagnostics/full-pool-lora-reward`；
+冻结YAML/Design/采样/14k Reward/定标不变，PPO暂停。基座为固定版本OLMo1B SFT，
+原参数冻结，Q/K/V/O、gate/up/down七类线性层加r16/alpha32/dropout0 LoRA；
+EOS隐藏状态的2048→1无bias头从全池最优L2=.01线性头初始化，LoRA B初始化为0。
+实际训练参数数目与全部适配层名由真实单卡验收报告提供。
+
+首轮一epoch，不重复或丢弃训练对，有效64对/步、单卡micro1对（两个完整回答），
+共2496次AdamW更新（末步2对按实际分母归一）。平均BT NLL加`.5*.01*||w||²`，
+adapter/head学习率2e-5/1e-4，adapter weight decay=.01、head不重复施加optimizer decay；
+Adam beta=.9/.999、epsilon1e-8，3% warmup后余弦降到10%，显式梯度范数裁剪1。
+保持FP32/禁TF32，非重入gradient checkpoint，无人工回答截断。
+每256步和末步跑完整开发集并保存可恢复的adapter/head/optimizer/RNG/游标；
+按开发NLL选checkpoint，初始零增量模型也作为候选。完整训练集准确率在同一选中checkpoint
+上另行分片前向、验证id/覆盖后汇总，不使用训练过程不同权重时点的累计准确率。
+
+启动顺序：生产SIF全库验收、CPU完整token缓存、真实最长样本单卡反向验收、训练、
+空闲GPU并行同checkpoint评分、CPU独立汇总。正常15–30分钟检查；实际速度/显存与时长
+以GPU验收和前期训练为准，不把启动或短验收当作全量训练完成。

@@ -6,12 +6,14 @@ from pathlib import Path
 from .config import load_config, plan
 
 
-GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "evaluate-generate", "model-smoke"}
+GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "evaluate-generate", "model-smoke",
+              "lora-reward-smoke", "lora-reward-train", "lora-reward-score"}
 STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-data", "extract-features",
           "merge-features", "geometry", "geometry-audit", "design", "design-report", "freeze-study", "sample", "reward",
           "prepare-shared", "merge-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
           "judge-export", "judge-import", "aggregate", "audit", "model-smoke", "shared-smoke", "audit-training",
-          "full-pool-reward", "full-pool-reward-report")
+          "full-pool-reward", "full-pool-reward-report", "lora-reward-data", "lora-reward-smoke",
+          "lora-reward-train", "lora-reward-score", "lora-reward-report")
 
 
 def stage_resource(stage):
@@ -112,6 +114,19 @@ def main(argv=None):
         elif args.stage == "full-pool-reward-report":
             from .full_pool_reward import summarize_full_pool
             value = summarize_full_pool(c)
+        elif args.stage.startswith("lora-reward-"):
+            from . import lora_reward
+            if args.stage == "lora-reward-data":
+                value = lora_reward.prepare(c)
+            elif args.stage == "lora-reward-smoke":
+                value = lora_reward.smoke(c)
+            elif args.stage == "lora-reward-train":
+                value = lora_reward.train(c, resume=args.resume)
+            else:
+                if args.shards is None:
+                    parser.error(f"{args.stage} requires --shards")
+                value = (lora_reward.score(c, args.shard_index, args.shards) if args.stage == "lora-reward-score"
+                         else lora_reward.summarize(c, args.shards))
         elif args.stage == "prepare-shared":
             if args.shards is None:
                 from .ppo import prepare_shared
