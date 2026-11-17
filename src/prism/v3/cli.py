@@ -10,7 +10,7 @@ GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "e
 STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-data", "extract-features",
           "merge-features", "geometry", "geometry-audit", "design", "design-report", "freeze-study", "sample", "reward",
           "prepare-shared", "merge-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
-          "judge-export", "judge-import", "aggregate", "audit", "model-smoke", "shared-smoke")
+          "judge-export", "judge-import", "aggregate", "audit", "model-smoke", "shared-smoke", "audit-training")
 
 
 def stage_resource(stage):
@@ -99,6 +99,9 @@ def main(argv=None):
         elif args.stage == "reward":
             from .reward import fit_rewards
             value = fit_rewards(c)
+        elif args.stage == "audit-training":
+            from .training_audit import audit_training
+            value = audit_training(c)
         elif args.stage == "prepare-shared":
             if args.shards is None:
                 from .ppo import prepare_shared

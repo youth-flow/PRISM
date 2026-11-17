@@ -9,7 +9,7 @@ from .study import independent_design_audit, lambda_name
 
 def required_stages(c):
     return ["data", "features", "geometry", "geometry-audit"] + ["design-" + lambda_name(v) for v in c["design"]["lambdas"]] + [
-        "design-report", "study-selection", "sampling", "reward", "shared-sft", "normalization",
+        "design-report", "study-selection", "sampling", "reward", "training-audit", "shared-sft", "normalization",
         "critic-warmup-empirical", "critic-warmup-prism", "ppo-common-acceptance",
         "policy-empirical", "policy-prism", "eval-sft", "eval-empirical", "eval-prism",
         "judge-export", "judge-import", "aggregate"]

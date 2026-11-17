@@ -502,7 +502,7 @@ def _train_policy(c, method, *, stop_after_episodes=None, resume=False):
         raise ValueError("V3 policy method must be empirical or prism")
     run = Run(c)
     run.selection()
-    for stage in ("data", "shared-sft", "reward", "normalization"):
+    for stage in ("data", "shared-sft", "reward", "normalization", "training-audit"):
         run.require(stage)
     if method == "prism":
         run.require("ppo-common-acceptance")
@@ -514,6 +514,7 @@ def _train_policy(c, method, *, stop_after_episodes=None, resume=False):
         weights = arrays["w"].copy()
     contract = hash_json({"config": run.fingerprint, "selection": digest(run.file("study/selection.json")),
                           "reward": digest(weight_path), "normalization": digest(norm_path),
+                          "training_audit": digest(run.receipt_path("training-audit")),
                           "policy_prompts": digest(run.file("data/policy.jsonl")),
                           "shared_sft": digest(run.receipt_path("shared-sft")), "executor": PROTOCOL,
                           "executor_sources": executor_sources()})
@@ -586,6 +587,6 @@ def _train_policy(c, method, *, stop_after_episodes=None, resume=False):
     _save_critic(critic, target / "critic")
     outputs = [p for p in target.rglob("*") if p.is_file() and "checkpoints" not in p.parts and p.name != ".execution.lock"]
     return run.publish(f"policy-{method}", outputs, inputs=[run.receipt_path(stage) for stage in
-                       ("study-selection", "data", "shared-sft", "reward", "normalization", f"critic-warmup-{method}", "ppo-common-acceptance")],
+                       ("study-selection", "data", "shared-sft", "reward", "training-audit", "normalization", f"critic-warmup-{method}", "ppo-common-acceptance")],
                        metadata={"method": method, "episodes": engine.completed_episodes, "executor": PROTOCOL,
                                  "completed": True, "actual_optimizer_steps": result["actual_optimizer_steps"]})

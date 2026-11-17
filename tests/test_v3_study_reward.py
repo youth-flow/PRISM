@@ -40,6 +40,11 @@ def test_one_budget_two_heads_shared_regularizer_and_fixed_normalization(tmp_pat
     assert report["selected_l2"] in c["reward"]["l2_candidates"]
     assert len(report["candidates"]) == 3
     assert fit_rewards(c) == report
+    from prism.v3.training_audit import audit_training
+    verified = audit_training(c)
+    assert verified["passed"] and verified["selected_l2"] == report["selected_l2"]
+    assert all(row["independent_wor_replay_exact"] for row in verified["sampling"].values())
+    assert audit_training(c) == verified
     calibration = np.arange(24, dtype=np.float32).reshape(8, 3) / 7
     path = run.file("shared/calibration.features.npz")
     save_npz(path, phi=calibration, ids=np.array([f"cal-{i}" for i in range(8)]))
@@ -75,6 +80,22 @@ def test_probability_validation_metrics_expose_overconfidence():
     neutral = prediction_metrics(v, [1, 0, 1, 0], [0])
     assert neutral["accuracy"] == 0.5
     assert neutral["bt_nll"] == pytest.approx(np.log(2))
+
+
+def test_independent_training_audit_rejects_a_false_gradient_claim(tmp_path, monkeypatch):
+    from prism.v3.training_audit import audit_training
+    c = configuration(tmp_path)
+    numerical_run(c)
+    freeze_study(c, 4, user_confirmed=True)
+    sample(c)
+
+    def false_fit(v, labels, **kwargs):
+        return np.zeros(v.shape[1]), {"gradient_inf": 0., "loss": float(np.log(2.))}
+
+    monkeypatch.setattr("prism.v3.reward.fit_bt", false_fit)
+    fit_rewards(c)
+    with pytest.raises(ValueError, match="gradient/objective"):
+        audit_training(c)
 
 
 def test_audit_checks_actual_completed_policy_not_the_configured_target(tmp_path):

@@ -20,6 +20,11 @@ python -m pytest -q tests/test_v3_evaluation.py
 
 计算命令使用 `--execute`，但该标志不会开启付费 Judge。模型计算在已验收的集群计算节点完成。原 V2 配置、权重、产物、账本及未知费用预留均不改动。
 
+用户确认N=14000/Design λ=.001后，`freeze-study`已正式记录该选择。
+`reward`完成后执行CPU `audit-training`：独立重放加权不放回顺序、复核人类标签方向及每个候选头的
+BT梯度/损失/开发指标和公共L2选择。PPO启动及检查点合同必须绑定该training-audit收据。
+先前共seed被误写为同pair共Gumbel键的日志已保留原hash归档；修正只改描述，选样JSONL须逐字节一致。
+
 ## 六阶段
 
 下例的 `$cfg` 在集群 Bash 中应设为 online1 下冻结 YAML 的绝对路径。每个成功阶段生成 `receipts/<stage>.json`；下游逐层核对配置、输入及输出 SHA256。失败／部分产物不算阶段完成。
