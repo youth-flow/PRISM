@@ -1,66 +1,41 @@
-# PRISM — V2
+# PRISM — V3
 
 Prospective-Regret-Aware Preference Sampling for Reward Modeling in RLHF.
 
-研究变量是标注前的比较边采样分布：固定SFT候选池 → Design选边 → 新偏好标签 →
-冻结EOS特征上的BT线性Reward → 相同PPO/LoRA → 独立评价。
+当前分支v3。使用HH人工偏好全池，先计算冻结SFT特征及全池loglinear代理K，按原目标求三档Design。
+**分布求出后暂停，由用户根据稀疏性决定唯一偏好预算N或是否更换求解算法。**
+随后比较Empirical/PRISM、seed11两个正式训练单元；V2配置、权重、账本和结果保留。
 
-当前工作分支为`v2`。按用户要求，先完成代码/配置审阅，再开始运行；当前API
-和正式集群实验保持暂停。已有V1结果和V2部分标签保留，不覆盖、不重新付费。
-
-## 最终实验
-
-| 项目 | 冻结设置 |
+| 环节 | V3协议 |
 |---|---|
-| SFT | OLMo-2-0425-1B-SFT，固定revision与原tokenizer模板 |
-| Prompt | Design3000、PPO2000、Eval500，另有541条IFEval |
-| 方法 / seed | Empirical、PRISM / 11、23 |
-| 标签预算 | 2048、4096、8192，nested_prefix，32768个有效观察 |
-| Design | 2048维，两ridge0.01，原q空间相对gap≤1e-4 |
-| Reward | 冻结backbone，2048→1无bias线性头，BT＋固定L2=0.01 |
-| PPO | FP32/禁TF32，Actor1e-5、Critic3e-5，4096 episodes/64 rollout/256 AdamW |
-| 训练Judge | Sol high/Flex，4096输出上限、3次尝试、900秒 |
-| 评价Judge | Luna medium/Flex，同上，AB/BA及TIE |
-| API总额 | 含既有消费最多40美元，操作停止线39美元 |
+| 数据 | HH官方train 160800原始pair，全池预检并报告有效M |
+| 特征/K | 冻结OLMo1B FP32 EOS2048；已有回答前向；全池代理K |
+| Design | 原simplex/联合L-BFGS-B；ridge .001/.01/.1；原FW gap<=1e-4 |
+| 预算/采样 | 一档N待用户决定；按剩余权重不放回 |
+| Reward | 冻结骨干线性BT；共用开发集选公共L2；固定SFT定标 |
+| PPO | 独立LoRA critic预热；65536episodes/batch128/4epochs/4096真实更新 |
+| 评价 | HH500，Luna medium/ABBA/TIE=.5，三比较3000有效判断 |
+| 当前范围 | 全池准备、特征、三档Design、暂停；未授权付费Judge |
 
-研究配置为[experiment.v2.yaml](configs/experiment.v2.yaml)，最终Judge执行配置为
-[judges.v2.yaml](configs/judges.v2.yaml)。两文件经过显式兼容验证：评价profile只覆盖
-Flex/900秒，原experiment.json和已标注packet保持不变。V1原配置为
-[experiment.yaml](configs/experiment.yaml)，历史结果见[报告](docs/final-experiment-report.md)。
-
-## 阅读和执行入口
-
-- [完整执行顺序、冻结配置、导入/恢复](docs/v2-runbook.md)
-- [计算资源正确高效使用、资源档位、Slurm、计费](docs/v2-compute.md)
-- [工程验收与当前暂停状态](docs/v2-readiness.md)
-- [最终冻结说明及实测Judge费用](docs/v2-frozen.md)
-- [概率数值协议](docs/numerical-protocol.md)、[PPO参数依据](docs/ppo-parameter-pilot.md)
-- [数学定义](docs/protocol.md)、[算法审计](ALGORITHM_REVIEW.md)
+- [完整方案与当前状态](docs/v3-plan.md)
+- [配置](configs/experiment.v3.yaml)、[执行和恢复手册](docs/v3-runbook.md)
+- [V2正式结果与审计](docs/v2-results-2026-11-17.md)
+- [V2 Reward/PPO定位](docs/v2-empirical-reward-ppo-diagnosis-2026-11-17.md)
+- [数学定义](docs/protocol.md)、[数值协议](docs/numerical-protocol.md)
 
 ```powershell
-$env:PYTHONPATH = "$PWD\src"
-python -X utf8 -m prism.v2 plan --config configs/experiment.v2.yaml --profile configs/judges.v2.yaml
-python -X utf8 -m pytest -q
+$env:PYTHONPATH = "$PWD/src"
+$env:PYTHONUTF8 = "1"
+python -m prism.v3 validate --config configs/experiment.v3.yaml
+python -m prism.v3 plan --config configs/experiment.v3.yaml
+python -m pytest -q
 ```
 
-plan只报告参数、缺失输入、六阶段资源和任务数，不加载模型、调用API或提交Job。
-基础依赖为Python3.11/NumPy/SciPy/PyYAML；完整测试需要`.[llm,benchmark,test]`
-及显式官方IFEval/NLTK资产，在已验收SIF的CPU计算节点执行。
+validate/plan不下载、不加载模型、不提交作业、不调用API。实际阶段显式传--execute。
+未记录用户N时，正式sample/Reward/PPO拒绝开始；Judge要求独立账本和显式美元上限。
+集群模型计算经Slurm在online1和固定SIF内执行，每任务1GPU，分片扩展，个人任务<=50。
+OpenAI key留本机；原始对话、账号、密钥、模型、容器、账本和运行产物不进Git。
 
-## 代码分层
-
-| 模块/目录 | 作用 |
-|---|---|
-| `src/prism/design.py` | loglinear proxy、K、同目标FW/联合L-BFGS-B求解 |
-| `src/prism/hf.py`、`ppo_numerics.py`、`ppo_optim.py` | OLMo/EOS、TRL0.15.2、概率闸门、真实AdamW步数 |
-| `src/prism/reward.py` | 无重要性加权的BT＋显式L2 |
-| `src/prism/v2.py`、`v2_audit.py` | 六阶段计划、配置冻结、前缀导入、Reward/PPO独立验收 |
-| `src/prism/budgeted_judge.py`、`api_budget.py` | 本机限额执行、owner锁、账本、响应落盘、暂停/离线恢复 |
-| `src/prism/local_judge.py` | 可校验packet、角色/顺序/协议、离线导出导入 |
-| `src/prism/evaluation_v2.py`、`benchmarks.py` | KL、直接胜率、配对统计、官方IFEval |
-| `scripts/yancheng/` | 不可变源码部署、CPU/GPU单任务调度、共享存储/容器 |
-| `scripts/windows/run_v2_judge.ps1` | 本机OpenAI执行入口；默认仅检查，不付费 |
-
-本机和集群运行源码均应固定到已提交版本。重要节点检查后普通推送`origin v2`，
-main保留原状态。密钥、账号资料、模型、SIF、数据、缓存、账本和运行产物不进Git。
-`execution.allow_paid_api_calls=false`及`PRISM_ALLOW_SUBMIT=0`默认保持关闭。
+prism.v3独立分层：data/features/geometry、study/reward、ppo/ppo_trainer、evaluation/audit。
+新PPO执行器保留概率闸门、实际裁剪、真实步数、独立critic及完整断点恢复，与V2隔离。
+重要验收节点普通提交并推送origin v3，不改main或v2历史。

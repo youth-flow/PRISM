@@ -1,85 +1,121 @@
-# V3 已确认方向与准备状态（2026-11-17）
+# V3：HH人工偏好全池设计与单预算RLHF
 
-用户明确确定：V3 使用人类标注数据、实际按 sampling 权重不放回选样、大幅增加偏好预算，并优化 PPO。随后指定先评估 Anthropic HH-RLHF。以下区分已确认协议、建议候选和待测参数；不把准备工作记为正式实验已经开始。
+以2026-11-17用户最新指令为准：分支v3，配置configs/experiment.v3.yaml，输出runs/olmo1b-hh-v3。
+已授权直接启动全池准备与Design；三档PRISM求出后暂停汇报，用户决定唯一预算N或是否更换求解算法。
 
-## 已确认的改变
+## 数据、模型与划分
 
-| 环节 | V3 方向 |
+| 项目 | 设置 |
 |---|---|
-| 偏好来源 | 使用已有的人类 chosen/rejected 判断，替代 V2 的逐 draw API 标注 |
-| 选样 | 两方法在同一个清洗后人类比较池上，按各自权重顺序不放回采样 |
-| 偏好预算 | 明显增加；N 表示不同的已标注比较对数，不表示新 API 次数 |
-| PPO | 重新验证并优化奖励量纲、critic、优化强度与训练日程 |
-| V2 | 配置、原始流、权重、结果及全部费用预留保留，不回写为 V3 |
+| 模型 | OLMo-2-0425-1B-SFT，revision 0d85a3d037876ce6ac7d4311d994400fc66ac27f |
+| 数据 | Anthropic/hh-rlhf，revision 09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa |
+| Design | 官方train 160800原始pair全部建库，报告有效M |
+| 方法/seed | Empirical、PRISM / 11 |
+| 偏好预算 | 仅一档，待用户看Design分布后决定，不自动取65536 |
+| PPO prompts | train中32768不同完整上下文，两方法共用，允许与Design重叠 |
+| Reward开发 | test中2048个人工比较对 |
+| PPO开发/最终评价 | test中互斥512/500个上下文，与训练上下文隔离 |
 
-“增加偏好预算”不自动解释为解冻 Reward backbone。此前用户指定的固定特征线性 Reward 保持为当前假设；若要训练 Reward 表示，需要单独明确特征、几何与 Design 的构建顺序。critic 的独立增强不要求同时解冻 Reward。
+仅使用helpful-base、helpful-online、helpful-rejection-sampled、harmless-base偏好子集。
+保留原文件SHA、行号和来源；解析完整共同对话及最后两回答，按内容hash固定A/B，标签另存。
+重复、冲突和解析异常分别记录；完整人工回答不截断后沿用标签。统一EOS计入特征及序列logp。
+全池编码上限4096；策略及评价prompt上限2048。数据、模型、密钥及产物不进Git。
 
-## HH-RLHF 初评
+## 全池特征、K和Design
 
-官方来源：[Anthropic 数据卡](https://huggingface.co/datasets/Anthropic/hh-rlhf/blob/main/README.md)、[作者仓库](https://github.com/anthropics/hh-rlhf)。数据卡明确说明 PM 数据由人工提供 helpfulness/harmlessness 偏好判断，格式为 chosen/rejected 完整对话；许可 MIT。只评估 PM 子集，red-team transcripts 不当作偏好对使用。
+全部有效人工回答由冻结FP32 SFT做teacher-forcing前向，取得2048维EOS特征和完整序列logp。
+GPU独立分片，严格检查全局索引、顺序、覆盖及hash；不是重新生成这些回答。
 
-本机匿名 GET 已读取数据集元数据、split/size 和前 100 条预览，未访问模型推理接口：
+沿用原loglinear代理：t为每对中心化logp，b=(X^T X+0.01 I)^(-1)X^T t；
+p_A,p_B=softmax(phi_A^T b,phi_B^T b)，v_i=phi_iA-phi_iB，
+K_HH=(1/M) sum_i p_iA p_iB v_i v_i^T。
 
-- 仓库当前 revision：`09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa`。
-- 数据服务报告 default train **160800 对**、test **8552 对**。
-- 100 条预览全部具有一致的最后 Assistant 之前的对话上下文，候选回答均非空，未发现逐字相同回答；71 条是多轮上下文。
-- 预览只是格式检查，不代表全池通过去重、冲突、token 上限或泄漏检查。数据查看服务预览不作为固定正式输入；正式下载须绑定上述 revision、源文件 SHA 与处理 manifest。
+K是HH有限双候选协方差代理，不冒称真实LoRA策略的精确G^T Fdag G。
+以pair平均，不是将同prompt全部候选联合归一化。不再为K生成4096x4个新SFT回答。
 
-初评结论：HH 是可行的人类偏好候选，但还不能把 160800 原始行都算成可用的独立比较对。
+固定同一v/K和surrogate ridge=0.01，matrix ridge比较0.001/0.01/0.1。
+目标为trace[K(lambda I+sum_i q_i v_i v_i^T)^(-1)]，原simplex约束。
+保持既有联合非负归一化L-BFGS-B，500次，原q空间相对FW gap<=1e-4。
+不加cap、熵或uniform floor；未收敛产物保留诊断，不放行正式选择。
 
-正式准备还需：
+报告支持数、ESS、最大权重、top1%/10%质量、95%/99%覆盖、微小正权、K谱，
+以及各自lambda下F(q)/F(emp)。跨lambda的原始F不直接排名；ESS不是WOR预算硬上限。
+助手负责选Design正则。用户确定N后显式freeze-study --budget N --user-budget-confirmed；
+选择文件绑定三份报告及权重。未冻结N时sample/Reward/PPO均拒绝开始。
+Empirical均匀有效pair，PRISM按剩余权重顺序不放回；不伪造包含概率为Nq，不补采零权边。
 
-1. 明确 helpful-base / helpful-online / helpful-rejection-sampled / harmless-base 的使用范围与比例。它们的回答来源和目的不同，不能把混合结果与通用指令质量直接等同。
-2. 解析共同多轮上下文及最终两回答，转换到固定 OLMo tokenizer 模板，保留原文/角色映射/原始判断方向。
-3. 按“上下文＋无序回答对”检测重复和反向重复；同对冲突标注单独报告，不按后续表现挑标签。
-4. 按 prompt/完整上下文分组划分训练设计池、Reward 开发/确认及最终评价；核查官方 train/test 跨分区内容重复。多轮近似上下文泄漏需单独定义检查范围。
-5. 用实际 tokenizer 核对上下文与完整回答长度，不静默截断人类回答后沿用原判断。报告每项筛除数量和最后可用 M。
-6. 用 label-blind 候选输入计算特征与权重，保留 canonical 方向和标签来源。可选边只来自已有标注 pair，不自动构造候选全组合并假定其标签已知。
+## Reward与共享SFT
 
-UltraFeedback 原数据的评分信号来自模型，不能改名叫人类标签；V2 使用其 prompt，并对固定候选回答另行取得 Sol high 偏好判断。V3 仍可将 UltraFeedback prompt 用于独立的目标策略/评价池，具体来源和数量待统一设定。人类比较用于构建可观测 v 与偏好样本；目标 K 的近似来源须明确，不能把人类池协方差自动称为精确目标策略 Fisher。
+冻结backbone，2048到1无bias线性BT，每个选中pair等权。
+L-BFGS-B最多2000次，梯度无穷范数目标1e-6；L2候选0.001/0.01/0.1。
+双方共用2048对开发集，以平均BT NLL选一个公共系数，严格并列取更强L2。
+6次CPU头拟合，选中两头直接复用；报告训练/开发NLL、准确率、Brier及置信度校准。
 
-## 不放回协议：按剩余权重重新归一化
+共同4096条固定SFT回答用于定标；各Reward按相同回答计算自己的mu/sigma并冻结，
+r_normalized=(r-mu)/sigma。轨迹复用作critic预热；另外512条PPO开发prompt生成共用SFT基线。
+共享生成总计4608条，不用于K；最终500题不参与选参。
 
-对于已选集合 S，下一条边 e 的条件概率为：
+## PPO配方
 
-$$P(e\mid S)=\frac{q_e}{\sum_{j\notin S}q_j},\qquad e\notin S.$$
+| 参数 | 设置 |
+|---|---|
+| Actor | LoRA r16/alpha32/all-linear/dropout0 |
+| Critic | 独立SFT副本+独立LoRA r16/alpha32+带bias value head |
+| Episodes | 65536，共同32768 prompt池两遍 |
+| Rollout/minibatch | 128/64，每轮2 minibatches |
+| Microbatch/accumulation | 2/32 |
+| PPO epochs/真实更新 | 4/4096次，512 rollout轮 |
+| LR actor/critic LoRA/value head | 1e-5/3e-5/1e-4 |
+| 日程 | 5% warmup，cosine到初始LR的10% |
+| AdamW | beta=(.9,.999)，epsilon=1e-5，weight decay0 |
+| gamma/GAE lambda/KL beta | 1/.95/.05，标准化Reward单位 |
+| policy/value clip，vf_coef | .2/.2，.1 |
+| 梯度裁剪 | actor/critic各自实际执行norm1 |
+| 生成 | T1/top-p1/top-k0/cap512/首EOS停止 |
+| 数值 | 一致FP32/禁TF32/零更新概率闸门 |
 
-同一方法/seed 的一个样本内不重复使用 pair；不同 seed、方法或预算允许引用同一已有人工判断，但不计为新标注或新的独立人工观测。
+新执行器为v3_single_card_streaming_ppo_v1，不冒称旧TRL只改配置。
+Clipped policy/value loss、终点p1放置和GAE沿用TRL0.15.2数学；
+为使microbatch等价，梯度按整个minibatch有效token归一化。
+生成及时提取selected logp并释放全词表logits；每2048 episodes另做耐久保存，与昂贵探针分离。
+checkpoint绑定源码、模型、数据、
+Reward、优化器、采样器游标及RNG；恢复不重跑已完成训练或共享生成前缀。
 
-这次确认采用的是实际加权顺序不放回，**不是**强制把最终包含概率设置为 Nq。初始权重 q、当步条件概率与最终包含概率是三种不同量；不沿用 V2 的 i.i.d. receipt，也不声称原 i.i.d. 风险界已经直接覆盖此协议。
+Critic从归一化Reward头初始化；2048条SFT轨迹4遍MC回报预拟合，minibatch64，共128步。
+另外最多128条轨迹检查heldout EV>0及MSE优于常数，再开始actor更新。
+使用最终N的Empirical Reward，验收2048工程节点和8192开发节点，不另设32K偏好档。
+8192共用闸门要求train奖励正增益、dev配对奖励及RLHF目标mean-1.96SE>0，
+dev critic MC拟合优于常数。失败保存检查点暂停，PRISM不放行。
+正式终点65536；检查点8192/16384/32768/65536，不按最终测试结果选checkpoint。
 
-已新增独立工具 `prism.weighted_sampling.weighted_without_replacement`：
+## 评价、费用和资源
 
-- 用 Gumbel 排序实现上述加权不放回顺序律；参考 [Kool 等，ICML 2019](https://proceedings.mlr.press/v97/kool19a.html)。
-- 固定池、权重与 seed 后，较小预算严格复用同一排序前缀；每个预算的 Reward/策略仍独立训练。
-- 输出初始/条件概率的对数和权重哈希，不伪造最终包含概率；对数域保留极小正权重，避免删去大质量后发生相减抵消。
-- 预算超过正权支持数时明确失败。**不会**自动加 uniform floor、重复采样、先有放回再去重、确定性取 top-N 或随机补齐零权边。
-- 当前工具尚未接入正式 V3 ingest、配置、receipt 或运行器；原 V2 pipeline 未改。
+HH500，SFT/Empirical/PRISM统一生成与prompt级seed。主比较PRISM对Empirical，
+配套为两者分别对SFT。Luna medium，AB/BA，胜1/平0.5/负0，先逐题平均。
+主评3000有效判断；原始调用和重试另计。Prompt bootstrap2000次，报告胜平负、
+换序分歧、helpful/harmless分项、长度/EOS/截断及MC KL，负值不裁零。
 
-若新 q 的正权支持数不足以支持大预算，应先明确覆盖改进方案并重新构建设计。岭项敏感性、熵正则或经验混合仍是候选，不因为本次确认不放回就自动加入。
+人工训练标签无付费调用。Luna仅本机、独立V3账本、显式新USD上限；当前未授权付费评价，
+默认关闭。不复用/重置V2账本、旧费用及未知预留。实际tier、usage及预留均保留证据。
 
-## 预算与公平比较
+GPU每任务1张、独立分片并行，不因资源授权擅自将PPO改成多卡。
+特征/生成2CPU/16G/1GPU；PPO8CPU/64G/1GPU，优先A10080GB；
+Design/几何16CPU/24G，遵循CPU分区每核内存规定，峰值待实测。
+个人运行/排队合计不超过50；源码在提交时固定快照，所有集群文件在online1。
+登录节点只提交/归档/调度查询；正常15-30分钟检查，异常/重要阶段立即处理。
 
-建议先评估 **16384 / 32768 / 65536** 个不同人类偏好对；这是候选，不是已冻结或已执行规模。更高档位取决于清洗后的 M、每方法的正权支持数、几何计算与训练基准。
+## 2026-11-17本次准备和启动状态
 
-两方法使用同一人类池、相同预算/seed、共同 Reward/PPO 设置和共同开发/评价集。固定 q 时可以用上述排序前缀做多预算耦合；若以后设计约束或 q 随 N 改变，则不能继续声称各预算是同一分布的严格前缀。
+本机隔离Python3.12/Torch2.8 CPU使用Transformers4.52.3、PEFT0.15.2、Accelerate1.7；
+V3最新专项87项全部通过，包含真实tiny OLMo2前向、LoRA/critic更新、stream/full一致、
+累积等价、独立裁剪、逐元素checkpoint恢复、共享生成恢复、离线费用导入。
+最终全库UTF8回归375 passed/14 skipped；生产Python3.11 SIF仍需同套验收，尚不能把本机测试称正式GPU学习效果已通过。
 
-偏好预算 N、唯一 pair 数、prompt 数、数据建库量、实际新增 API 调用数分别报告。人类判断已存在，不能把所有选择行重复计为付费标注；PPO on-policy 回答仍要由当前 actor 重新生成。
+固定8份HH原文件已下载并hash归档。本机全量预检得到159682有效train pair、
+158861训练上下文；test8493有效pair中71条与train上下文重叠，排除后8422。
+原train1118条/test59条隔离；合计原因：角色歧义219、空回答183、相同回答775。
+无静默截断或猜标签，三个开发/评价划分及32768策略上下文足额。
 
-## PPO 优化与性能验收
-
-先在 Empirical 共同开发流程中建立可复核的收益，再固定同一设置用于全部采样方法：
-
-1. **Reward 泛化**：检查 prompt 隔离的准确率、BT logloss、校准及域外回答排序；区分人类标签信号、固定表示误差与统计方差。最终测试集不选正则或模型。
-2. **奖励量纲**：固定共同的 SFT 校准 prompts/回答；先区分中心化与尺度变化，并记录归一化对应的有效 KL 系数。Reward 训练的概率校准与 PPO 使用的分数定标分开。
-3. **critic**：比较初始化/预拟合以及可训练表示能力；保持冻结 RM 与可训练 critic 的参数隔离。保存 value/return、MSE、均值偏差、explained variance 与实际优势时序，不能只验收有限参数或 loss。
-4. **优化强度**：比较实际 rollout 数、actor/critic AdamW 步、token 量、学习率日程与训练时长；小规模检查用于筛错，随后分段延长并保留检查点，不把 V2 的 4096 episodes 当成已证明充分。
-5. **性能检查**：同时用固定训练探针和独立开发探针检查自身 Reward、KL、长度/EOS 与外部偏好；机械更新完成和最终收益分开验收。避免按各方法最终胜率分别调参。
-
-具体 PPO episodes、全局 batch/minibatch、actor/critic 参数化、学习率、KL、评价 Judge 与费用安排尚待确定。此处没有把外部建议的 524K episodes/全参数 RM 或某个新 λ 当作已验证配置。
-
-## 本次准备与边界
-
-- 加权不放回工具本机 17 项测试通过，包含有序联合抽样律与直接顺序概率检查、前缀/无重复/零权排除、极端权重和非法支持检测。还没有完成正式集群全回归或真实 V3 数据验收。
-- 数据元信息和预览仅保存在忽略目录 `local/v3-preparation/hh-rlhf-assessment`，不提交对话内容、私有配置或密钥。
-- 本次没有集群任务、模型训练、额外标注或付费 Judge 请求；V2 账本与结果保持原样。
+目前集群VPN断开、SSH超时，尚未提交V3 GPU或Design作业。
+恢复后在固定源码中完成SIF验收、全池特征与三lambda Design，完成后暂停等用户N/算法决定。
+操作入口见[v3-runbook.md](v3-runbook.md)。
