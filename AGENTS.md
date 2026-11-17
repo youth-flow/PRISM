@@ -1,5 +1,7 @@
 # PRISM 工作约定
 
+- **V3放行状态（2026-11-17 18:16）**：466babb生产SIF全库1986918已393 passed/0 skipped，三类GPU真实1B FP32验收及正式HH准备均已通过。32片1986926/27/28已有11片实际RUNNING（AMD A100×7、Intel A100×2、4090×2）；归并1986930→几何及独立审计1986932→三λ1986934/36/37→分布报告1986939为依赖排队，不能记作完成。旧首轮测试失败记录保留；旧零分配数组1986899/1986900/1986901及归并1986922已保留metadata/hash后普通取消，因站点不接受其旧afterok重接而普通替代，未hold/release。正式data有效159682训练对、test排除71训练重叠后8422；500评价/2048 Reward开发/512 PPO开发/32768策略上下文足额。新源码不可变release、API零调用、N=null，Design后暂停。
+
 - **V3集群启动（2026-11-17 18:10）**：用户已恢复实际SafeConnect VPN，SSH正常；AMD/Intel A100及4090的真实FP32模型验收1986892–94全部通过，正式HH预处理1986895完成。首轮SIF全库1986890为387 passed/6 failed，失败均为离线模拟本机Judge的测试继承Slurm job id，被正确的生产禁集群API闸门拒绝；仅隔离该测试模块环境，生产闸门不改，显式集群拒绝测试保留。32片1986899/1986900/1986901仍依赖阻止、未占卡；待修订测试全库复验后重接，不能冒称特征已完成。合并与独立审计CPU资源按全池内存增加，不修改已排队不可变源码。API仍关闭、N未定、Design后暂停。
 
 - **V3工程首版验收（2026-11-17）**：已在v3独立实现schema3、HH全池解析/完整token审计/统一tokenizer语义指纹、FP32分片/恢复seal/归并、全池双候选proxyK及独立LU/显式协方差审计、三λ原simplex求解与独立gap、用户N冻结闸门、不放回选样、共用L2开发选择/定标、独立critic/streaming PPO/checkpoint与probe崩溃恢复、Luna独立账本/严格导入/汇总、合规不可变Slurm入口。最终本机隔离环境UTF8全库375 passed/14 skipped，V3相关专项87 passed；生产SIF实测尚待。8份固定HH raw已下载；本机旧配置/旧plain-tokenizer预检159682有效train pair、test排除71训练上下文重叠后8422，各划分足额；该预检已带原hash移到local/v3-execution/preflight-fd35f66ad655，正式cluster要在最终统一tokenizer/source下重新prepare，不冒称正式phase1完成。新config hash=fbd77c2d189822800445626d1c91e937898d247366fc719c5988e835c8fe9cc4；budget仍null、API关闭。当前VPN网卡断开/SSH超时，尚无V3 Slurm提交。恢复后先SIF CPU/单GPU验收，再全池特征及三λDesign，到分布报告暂停。用户未跟踪PDF不提交，旧V2研究源码/配置/账本未改。

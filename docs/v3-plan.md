@@ -109,13 +109,24 @@ Design/几何16CPU/24G，遵循CPU分区每核内存规定，峰值待实测。
 本机隔离Python3.12/Torch2.8 CPU使用Transformers4.52.3、PEFT0.15.2、Accelerate1.7；
 V3最新专项87项全部通过，包含真实tiny OLMo2前向、LoRA/critic更新、stream/full一致、
 累积等价、独立裁剪、逐元素checkpoint恢复、共享生成恢复、离线费用导入。
-最终全库UTF8回归375 passed/14 skipped；生产Python3.11 SIF仍需同套验收，尚不能把本机测试称正式GPU学习效果已通过。
+最终本机全库UTF8回归375 passed/14 skipped；生产Python3.11 SIF全库1986918已393 passed、零跳过。
+首轮1986890的6项失败来自模拟本机Judge测试继承Slurm作业号，测试环境已独立隔离；
+生产集群API禁用规则及显式拒绝测试均保留。两次记录都保存，不将工程检查视为正式PPO学习效果。
 
 固定8份HH原文件已下载并hash归档。本机全量预检得到159682有效train pair、
 158861训练上下文；test8493有效pair中71条与train上下文重叠，排除后8422。
 原train1118条/test59条隔离；合计原因：角色歧义219、空回答183、相同回答775。
 无静默截断或猜标签，三个开发/评价划分及32768策略上下文足额。
 
-目前集群VPN断开、SSH超时，尚未提交V3 GPU或Design作业。
-恢复后在固定源码中完成SIF验收、全池特征与三lambda Design，完成后暂停等用户N/算法决定。
+用户恢复SafeConnect VPN后SSH已接通。生产HH预处理1986895用时3分39秒完成，
+最终统一tokenizer得到的上述数量与预检一致；data receipt SHA256为
+02f44f50488d972d974afacb71fcae9df85d6ca2025cdb9d79fcfb3ea8d39a01。
+AMD/Intel A100及4090真实FP32 1B模型验收1986892–94均通过。
+
+18:16时32片特征数组1986926/27/28已有11片RUNNING（7张AMD A100、2张Intel A100、2张4090），
+余片随空卡接续；特征尚未完成。源466babb固定于独立release，配置字节及研究算法未变。
+归并1986930（8CPU/12G）→全池K及独立审计1986932（16CPU/24G）→
+三lambda Design1986934/36/37（各16CPU/24G）→报告1986939已按afterok排队。
+旧未启动数组及其归并在保留元数据/hash后普通取消，0分配；没有hold/release或优先级操作。
+完成后暂停等用户N/算法决定，当前未提交sample/Reward/PPO，新增付费API为0。
 操作入口见[v3-runbook.md](v3-runbook.md)。

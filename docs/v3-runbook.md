@@ -44,7 +44,7 @@ PRISM_ARRAY=0-31%8 bash scripts/yancheng/submit_v3.sh --dry-run extract-features
 
 每任务一张GPU；特征／评价用独立分片扩展并行，不能将单进程 PPO直接换成多卡。提交器按数组任务展开数核对个人运行＋排队合计不超过50，不提高优先级、不占他人reservation、不使用exclusive。GPU分区逐次指定，避免站点拒绝多分区请求。
 
-默认资源：特征／共享生成／评价为2CPU／16G／1GPU；PPO为8CPU／64G／1GPU，优先A10080GB；Design／几何为16CPU／24G。q_amd_share 已验收CPU配置约每核心1.5GiB，16CPU／64G不是已验证合法配置。全 HH 峰值内存仍须基准；需要更大主存时，用站点支持的配套核心／内存数（例如显式48CPU／72G），或先优化分块内存。其他CPU分区按其实际规范，不把此限制套到GPU节点主存。
+默认资源：特征／共享生成／评价为2CPU／16G／1GPU；PPO为8CPU／64G／1GPU，优先A10080GB；Design／几何／独立审计为16CPU／24G，特征归并为8CPU／12G。q_amd_share 已验收CPU配置约每核心1.5GiB，16CPU／64G不是已验证合法配置。全 HH 峰值内存仍须实测；需要更大主存时，用站点支持的配套核心／内存数（例如显式48CPU／72G），或先优化分块内存。其他CPU分区按其实际规范，不把此限制套到GPU节点主存。
 
 PPO默认申请24小时，并非声称完整65536 episodes可在24小时结束。每2048 episodes独立做耐久保存，不强制每次执行昂贵探针。若分区最长时限不覆盖完整训练，使用显式 `--stop-after-episodes` 检查点和下一作业 `--resume` 接续；配置／数据／Reward／优化器／RNG身份必须一致。检查点已存而probe中断时，恢复先补齐同一检查点的probe，保持训练RNG。总工期由真实新配方吞吐更新，不能照搬 V2 的几小时。
 
