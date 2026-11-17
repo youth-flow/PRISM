@@ -9,13 +9,13 @@ gpu=0; cpus=2; memory=3G; duration=01:00:00
 case "$stage" in
   extract-features|prepare-shared|evaluate-generate) gpu=1; cpus=2; memory=16G; duration=12:00:00 ;;
   policy) gpu=1; cpus=8; memory=64G; duration=24:00:00 ;;
-  model-smoke) gpu=1; cpus=8; memory=64G; duration=01:00:00 ;;
+  model-smoke|shared-smoke) gpu=1; cpus=8; memory=64G; duration=01:00:00 ;;
   download-data) cpus=4; memory=6G; duration=04:00:00 ;;
   prepare-data|geometry|geometry-audit|design|freeze-study|audit) cpus=16; memory=24G; duration=12:00:00 ;;
   merge-features) cpus=8; memory=12G; duration=04:00:00 ;;
   reward) cpus=8; memory=12G; duration=04:00:00 ;;
   cpu-smoke) cpus=4; memory=6G; duration=01:00:00 ;;
-  validate|plan|status|design-report|sample|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate) ;;
+  validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate) ;;
   *) prism_die "Unsupported V3 compute stage; paid Judges run locally: $stage" ;;
 esac
 prism_check_paths
@@ -62,7 +62,7 @@ if [[ -n "${PRISM_DEPENDENCY:-}" ]]; then
 fi
 new_tasks=1
 if [[ -n "${PRISM_ARRAY:-}" ]]; then
-  [[ "$stage" == extract-features || "$stage" == evaluate-generate ]] || prism_die "Only independent feature/generation shards use arrays"
+  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared ]] || prism_die "Only independent feature/generation shards use arrays"
   [[ "$PRISM_ARRAY" =~ ^([0-9]+)-([0-9]+)%([0-9]+)$ ]] || prism_die "Array needs FIRST-LAST%CONCURRENCY"
   first=$((10#${BASH_REMATCH[1]})); last=$((10#${BASH_REMATCH[2]})); concurrent=$((10#${BASH_REMATCH[3]}))
   [[ "$first" -le "$last" && "$concurrent" -ge 1 && "$concurrent" -le 50 ]] || prism_die "Invalid array range/concurrency"

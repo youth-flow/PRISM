@@ -115,7 +115,8 @@ def sample(c):
     for method in c["study"]["methods"]:
         result = weighted_without_replacement(distributions[method], selection["budget"], c["study"]["seed"])
         indices = result["ordered_indices"]
-        result.update(method=method, pair_ids=ids[indices].tolist(), common_gumbel_keys=True,
+        result.update(method=method, pair_ids=ids[indices].tolist(), common_gumbel_keys=False,
+                      shared_rng_seed=True, gumbel_key_alignment="positive_support_order",
                       labels_are_existing_human_observations=True)
         marker = run.file(f"sampling/{method}.json")
         write_json(marker, result)

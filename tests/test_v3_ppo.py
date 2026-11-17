@@ -377,3 +377,81 @@ def test_durable_checkpoints_do_not_trigger_extra_probes_and_resume_without_repl
     assert resumed.history == continuous.history
     for name, value in trainable(continuous.actor).items():
         assert torch.equal(value, trainable(resumed.actor)[name])
+
+
+def test_shared_shards_match_serial_and_resume_exactly(tmp_path, monkeypatch):
+    import prism.v3.ppo as stage
+    import prism.v3.shared as sharded
+    from prism.v3.artifacts import Run
+    from prism.io import rows
+
+    class Tokenizer:
+        pad_token_id, eos_token_id = 37, 2
+
+        def apply_chat_template(self, messages, **kwargs):
+            return [1, 5 + int(messages[-1]["content"])]
+
+    p = settings()
+    p["fixed_train_probe_prompts"] = 2
+    c = {"output": str(tmp_path / "shards"), "study": {"seed": 11},
+         "data": {"max_prompt_tokens": 16, "context_tokens": 64, "feature_dimension": 16},
+         "reward": {"calibration_responses": 6}, "ppo": p}
+    model = models()[0].get_base_model()
+    monkeypatch.setattr(stage, "load_model", lambda config: deepcopy(model))
+    monkeypatch.setattr(stage, "load_tokenizer", lambda config: Tokenizer())
+
+    def prepare(config):
+        run = Run(config)
+        for name, indices in (("policy", range(8)), ("ppo_dev", (10, 11))):
+            stage._save_rows(run.file(f"data/{name}.jsonl"),
+                [{"id": str(i), "messages": [{"role": "user", "content": str(i)}]} for i in indices])
+        run.publish("data", [run.file("data/policy.jsonl"), run.file("data/ppo_dev.jsonl")])
+        return run
+
+    run = prepare(c)
+    original = sharded._generate_row
+    calls = []
+
+    def interrupted(*args):
+        calls.append(args[-1])
+        if len(calls) == 2:
+            raise RuntimeError("simulated shard worker exit")
+        return original(*args)
+
+    monkeypatch.setattr(sharded, "_generate_row", interrupted)
+    with pytest.raises(RuntimeError, match="simulated shard"):
+        sharded.prepare_shared_part(c, 0, 3)
+    assert calls == [0, 3]
+    saved = rows(run.file("shared/parts/00000-of-00003/progress.jsonl"))
+    resumed = []
+
+    def resume(*args):
+        resumed.append(args[-1])
+        return original(*args)
+
+    monkeypatch.setattr(sharded, "_generate_row", resume)
+    for shard in (0, 2, 1):
+        sharded.prepare_shared_part(c, shard, 3)
+    assert 0 not in resumed
+    assert rows(run.file("shared/parts/00000-of-00003/progress.jsonl"))[:1] == saved
+    sharded.merge_shared(c, 3)
+    serial_c = deepcopy(c)
+    serial_c["output"] = str(tmp_path / "serial")
+    serial = prepare(serial_c)
+    stage.prepare_shared(serial_c)
+    for group in ("calibration", "dev_probe", "train_probe"):
+        assert run.file(f"shared/{group}.jsonl").read_bytes() == serial.file(f"shared/{group}.jsonl").read_bytes()
+        with np.load(run.file(f"shared/{group}.features.npz")) as a, np.load(serial.file(f"shared/{group}.features.npz")) as b:
+            assert np.array_equal(a["phi"], b["phi"])
+            assert np.array_equal(a["ids"], b["ids"])
+    smoke = sharded.shared_smoke(c)
+    assert smoke["metadata"]["actual_generated_responses"] == 12
+    assert smoke["metadata"]["max_feature_error"] == 0
+    monkeypatch.setattr(stage, "load_model", lambda c: pytest.fail("completed shard loaded model"))
+    sharded.prepare_shared_part(c, 0, 3)
+    sharded.merge_shared(c, 3)
+    # Hash verification remains active even after successful publication.
+    with run.file("shared/parts/00000-of-00003/progress.jsonl").open("a") as f:
+        f.write(" ")
+    with pytest.raises(ValueError, match="changed"):
+        sharded.prepare_shared_part(c, 0, 3)

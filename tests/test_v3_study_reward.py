@@ -32,6 +32,10 @@ def test_one_budget_two_heads_shared_regularizer_and_fixed_normalization(tmp_pat
     assert summary["new_annotation_api_calls"] == 0
     for method in c["study"]["methods"]:
         assert len({r["id"] for r in rows(run.file(f"sampling/{method}.jsonl"))}) == 4
+        metadata = read_json(run.file(f"sampling/{method}.json"))
+        assert metadata["shared_rng_seed"] is True
+        assert metadata["common_gumbel_keys"] is False
+        assert metadata["gumbel_key_alignment"] == "positive_support_order"
     report = fit_rewards(c)
     assert report["selected_l2"] in c["reward"]["l2_candidates"]
     assert len(report["candidates"]) == 3

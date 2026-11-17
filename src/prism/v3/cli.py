@@ -6,11 +6,11 @@ from pathlib import Path
 from .config import load_config, plan
 
 
-GPU_STAGES = {"extract-features", "prepare-shared", "policy", "evaluate-generate", "model-smoke"}
+GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "evaluate-generate", "model-smoke"}
 STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-data", "extract-features",
           "merge-features", "geometry", "geometry-audit", "design", "design-report", "freeze-study", "sample", "reward",
-          "prepare-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
-          "judge-export", "judge-import", "aggregate", "audit", "model-smoke")
+          "prepare-shared", "merge-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
+          "judge-export", "judge-import", "aggregate", "audit", "model-smoke", "shared-smoke")
 
 
 def stage_resource(stage):
@@ -100,8 +100,20 @@ def main(argv=None):
             from .reward import fit_rewards
             value = fit_rewards(c)
         elif args.stage == "prepare-shared":
-            from .ppo import prepare_shared
-            value = prepare_shared(c)
+            if args.shards is None:
+                from .ppo import prepare_shared
+                value = prepare_shared(c)
+            else:
+                from .shared import prepare_shared_part
+                value = prepare_shared_part(c, args.shard_index, args.shards)
+        elif args.stage == "merge-shared":
+            if args.shards is None:
+                parser.error("merge-shared requires --shards")
+            from .shared import merge_shared
+            value = merge_shared(c, args.shards)
+        elif args.stage == "shared-smoke":
+            from .shared import shared_smoke
+            value = shared_smoke(c)
         elif args.stage == "normalize-reward":
             from .reward import normalize_rewards
             value = normalize_rewards(c)
