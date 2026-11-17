@@ -11,7 +11,7 @@ if not hasattr(transformers, "Olmo2Model"):
     pytest.skip("Pinned Transformers needed for OLMo2", allow_module_level=True)
 
 from prism.v3.lora_reward import (RECIPE, PackedPairs, _pack, _restore, _save_checkpoint,
-                                  frozen_hash, logit_metrics, make_model, optimizer, predict,
+                                  batch_boundaries, frozen_hash, logit_metrics, make_model, optimizer, predict,
                                   trainable_state, update)
 from prism.v3.ppo_trainer import seed_everything
 
@@ -95,6 +95,39 @@ def test_microbatch_one_and_four_match_actual_updates():
     update(other, b, Data(), [0, 1, 2], 37, {**recipe, "micro_pairs": 4})
     for name, value in trainable_state(model).items():
         assert torch.allclose(value, trainable_state(other)[name], atol=2e-6, rtol=1e-5)
+
+
+def test_requested_checkpoints_are_exact_and_each_pair_is_used_once():
+    batches = batch_boundaries(159682)
+    assert len(batches) == 2497
+    assert {10000, 50000, 100000, 159682} <= {end for _, end in batches}
+    assert all(0 < end-start <= 64 for start, end in batches)
+    assert [end-start for start, end in batches if end in {10000, 100000, 159682}] == [16, 16, 34]
+    assert batches[0][0] == 0 and batches[-1][1] == 159682
+    assert all(a[1] == b[0] for a, b in zip(batches, batches[1:]))
+    rng = np.random.default_rng(11)
+    order = rng.permutation(159682)
+    consumed = np.concatenate([order[a:b] for a, b in batches])
+    assert np.array_equal(consumed, order)
+    assert len(set(consumed)) == 159682
+    assert batch_boundaries(3) == [(0, 3)]
+    with pytest.raises(ValueError):
+        batch_boundaries(0)
+
+
+def test_fresh_head_initialization_is_reproducible_without_preference_weights():
+    def fresh():
+        seed_everything(11)
+        c = transformers.Olmo2Config(vocab_size=37, hidden_size=16, intermediate_size=32,
+                                     num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=2,
+                                     max_position_embeddings=64, attention_dropout=0.)
+        c._attn_implementation = "eager"
+        return make_model(transformers.Olmo2Model(c).float())
+    a, b = fresh(), fresh()
+    assert a.head.weight.shape == (1, 16) and a.head.bias is None
+    assert torch.equal(a.head.weight, b.head.weight)
+    assert 0 < a.head.weight.std().item() < .03
+    assert all(torch.count_nonzero(p) == 0 for n, p in a.named_parameters() if "lora_B" in n)
 
 
 def test_checkpoint_resume_reproduces_next_actual_adam_step(tmp_path):

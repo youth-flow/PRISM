@@ -4,7 +4,6 @@ The original V3 config/geometry/heads stay immutable. This module has its own
 recipe, packed complete-answer inputs, checkpoints, predictions and receipts.
 """
 import hashlib
-import math
 from pathlib import Path
 import time
 
@@ -17,9 +16,11 @@ from .recovery import seal_and_publish, stage_lock
 from .reward import prediction_metrics, save_npz
 
 
-PREFIX = "diagnostics/full-pool-lora-reward"
+CACHE_PREFIX = "diagnostics/full-pool-lora-reward"
+PREFIX = "diagnostics/full-pool-lora-reward-fresh-head"
+STAGE_PREFIX = "lora-reward-fresh"
 RECIPE = {
-    "protocol": "v3_full_pool_reward_lora_v1", "seed": 11,
+    "protocol": "v3_full_pool_reward_lora_fresh_head_v2", "seed": 11,
     "rank": 16, "alpha": 32, "dropout": 0.,
     "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     "epochs": 1, "effective_pairs": 64, "micro_pairs": 4,
@@ -27,9 +28,9 @@ RECIPE = {
     "head_l2": .01, "adapter_weight_decay": .01,
     "adam_betas": [.9, .999], "adam_epsilon": 1e-8,
     "warmup_ratio": .03, "minimum_learning_rate_ratio": .1,
-    "gradient_norm": 1., "checkpoint_steps": 256,
+    "gradient_norm": 1., "checkpoint_steps": 256, "checkpoint_pairs": [10000, 50000, 100000],
     "precision": "FP32_TF32_disabled", "gradient_checkpointing": "non_reentrant",
-    "head_bias": False, "initialization": "full_pool_development_selected_linear_head_zero_LoRA",
+    "head_bias": False, "initialization": "SFT_zero_LoRA_fresh_random_scalar_head", "head_initialization_std": .01,
     "selection": "development_mean_BT_NLL_including_initial_checkpoint",
     "truncate_human_answers": False, "final_policy_evaluation_used": False,
     "formal_PPO_reward": False, "api_calls": 0,
@@ -45,6 +46,20 @@ def sources():
 def logit_metrics(logits, labels):
     z, y = np.asarray(logits, dtype=np.float64), np.asarray(labels, dtype=np.float64)
     return prediction_metrics(z[:, None], y, np.ones(1))
+
+
+def batch_boundaries(count, recipe=RECIPE):
+    """One shuffled pass, exact requested milestones, true partial-batch means."""
+    if type(count) is not int or count < 1 or recipe["effective_pairs"] < 1:
+        raise ValueError("Reward needs a nonempty positive batch plan")
+    cuts = sorted({n for n in recipe["checkpoint_pairs"] if 0 < n < count} | {count})
+    result, start = [], 0
+    for cut in cuts:
+        while start < cut:
+            end = min(start+recipe["effective_pairs"], cut)
+            result.append((start, end))
+            start = end
+    return result
 
 
 def _pack(path, records, labels, tokenizer, context):
@@ -92,7 +107,7 @@ def prepare(c):
     run, stage = Run(c), "lora-reward-data"
     with stage_lock(run, stage):
         if run.completed(stage):
-            return read_json(run.file(f"{PREFIX}/data.json"))
+            return read_json(run.file(f"{CACHE_PREFIX}/data.json"))
         for name in ("data", "full-pool-reward-report"):
             run.require(name)
         from .ppo import load_tokenizer
@@ -108,19 +123,19 @@ def prepare(c):
             raise ValueError("LoRA train/development labels or context separation failed")
         report = {"recipe": RECIPE, "recipe_sha256": hash_json(RECIPE), "eos": tokenizer.eos_token_id,
                   "pad": tokenizer.pad_token_id, "tokenizer_semantics": tokenizer_fingerprint(tokenizer),
-                  "training": _pack(run.file(f"{PREFIX}/train"), pool, [labels[r["id"]] for r in pool], tokenizer,
+                  "training": _pack(run.file(f"{CACHE_PREFIX}/train"), pool, [labels[r["id"]] for r in pool], tokenizer,
                                     c["data"]["context_tokens"]),
-                  "development": _pack(run.file(f"{PREFIX}/dev"), dev, [r["label"] for r in dev], tokenizer,
+                  "development": _pack(run.file(f"{CACHE_PREFIX}/dev"), dev, [r["label"] for r in dev], tokenizer,
                                        c["data"]["context_tokens"])}
-        write_json(run.file(f"{PREFIX}/data.json"), report)
-        outputs = [run.file(f"{PREFIX}/{s}.{e}") for s in ("train", "dev") for e in ("tokens", "npz")]
-        outputs.append(run.file(f"{PREFIX}/data.json"))
+        write_json(run.file(f"{CACHE_PREFIX}/data.json"), report)
+        outputs = [run.file(f"{CACHE_PREFIX}/{s}.{e}") for s in ("train", "dev") for e in ("tokens", "npz")]
+        outputs.append(run.file(f"{CACHE_PREFIX}/data.json"))
         seal_and_publish(run, stage, outputs, [run.receipt_path("data"), run.receipt_path("full-pool-reward-report")],
                          metadata=report, code_paths=sources(), context=RECIPE)
         return report
 
 
-def make_model(backbone, weights, recipe=RECIPE):
+def make_model(backbone, weights=None, recipe=RECIPE):
     import torch
     from peft import LoraConfig, TaskType, get_peft_model
     backbone.requires_grad_(False)
@@ -137,10 +152,14 @@ def make_model(backbone, weights, recipe=RECIPE):
         def __init__(self):
             super().__init__()
             self.backbone = adapted
-            self.head = torch.nn.Linear(len(weights), 1, bias=False, dtype=torch.float32,
+            dimension = backbone.config.hidden_size if weights is None else len(weights)
+            self.head = torch.nn.Linear(dimension, 1, bias=False, dtype=torch.float32,
                                         device=next(backbone.parameters()).device)
             with torch.no_grad():
-                self.head.weight.copy_(torch.as_tensor(np.asarray(weights).copy(), dtype=torch.float32)[None])
+                if weights is None:
+                    torch.nn.init.normal_(self.head.weight, mean=0., std=recipe["head_initialization_std"])
+                else:  # Explicit weights are only used by independent small numerical fixtures.
+                    self.head.weight.copy_(torch.as_tensor(np.asarray(weights).copy(), dtype=torch.float32)[None])
 
         def forward(self, sequences, pad):
             from .ppo_trainer import left_pad, prepare_inputs
@@ -232,24 +251,25 @@ def _load(c):
     from .ppo import load_model
     run = Run(c)
     run.require("lora-reward-data")
-    report = read_json(run.file(f"{PREFIX}/data.json"))
+    report = read_json(run.file(f"{CACHE_PREFIX}/data.json"))
     original_recipe = report["recipe"]
-    if (report["recipe_sha256"] != hash_json(original_recipe)
-            or {k:v for k,v in original_recipe.items() if k != "micro_pairs"}
-            != {k:v for k,v in RECIPE.items() if k != "micro_pairs"}):
-        raise ValueError("Packed Reward inputs belong to another recipe")
-    with np.load(run.file("diagnostics/full-pool-reward/l2-0.01/weights.npz"), allow_pickle=False) as f:
-        weights = f["w"]
+    semantics = read_json(run.file("data/manifest.json"))["tokenizer_semantics"]
+    # Packed token identities depend on tokenizer/data, never on optimizer or
+    # head initialization. Preserve and reuse the original cache byte for byte.
+    if (report["recipe_sha256"] != hash_json(original_recipe) or report["tokenizer_semantics"] != semantics
+            or report["eos"] != semantics["eos_token_id"] or report["pad"] != semantics["pad_token_id"]):
+        raise ValueError("Packed Reward tokenizer/input contract changed")
     from .ppo_trainer import seed_everything
     seed_everything(RECIPE["seed"])
-    model = make_model(load_model(c, causal=False), weights)
-    train, dev = (PackedPairs(run.file(f"{PREFIX}/{s}")) for s in ("train", "dev"))
+    model = make_model(load_model(c, causal=False))
+    weights = model.head.weight.detach().cpu().numpy().reshape(-1).copy()
+    train, dev = (PackedPairs(run.file(f"{CACHE_PREFIX}/{s}")) for s in ("train", "dev"))
     return run, report, model, train, dev, weights
 
 
 def smoke(c):
     import torch
-    run, stage = Run(c), f"lora-reward-smoke-micro{RECIPE['micro_pairs']}"
+    run, stage = Run(c), f"{STAGE_PREFIX}-smoke-micro{RECIPE['micro_pairs']}"
     with stage_lock(run, stage):
         if run.completed(stage):
             return read_json(run.file(f"{PREFIX}/smoke-micro{RECIPE['micro_pairs']}.json"))
@@ -324,18 +344,20 @@ def _restore(model, checkpoint):
 def train(c, *, resume=False):
     import torch
     from .ppo_math import learning_rate_multiplier
-    run, stage = Run(c), "lora-reward-train"
+    run, stage = Run(c), f"{STAGE_PREFIX}-train"
     with stage_lock(run, stage):
         if run.completed(stage):
             return read_json(run.file(f"{PREFIX}/training.json"))
-        smoke_stage = f"lora-reward-smoke-micro{RECIPE['micro_pairs']}"
+        smoke_stage = f"{STAGE_PREFIX}-smoke-micro{RECIPE['micro_pairs']}"
         run.require(smoke_stage)
         run, inputs, model, data, dev, _ = _load(c)
         directory = run.file(f"{PREFIX}/checkpoints")
         contract = {"recipe_sha256": hash_json(RECIPE), "input_receipt": digest(run.receipt_path("lora-reward-data")),
                     "sources": {p.name: digest(p) for p in sources()}, "config": run.fingerprint}
         order = np.random.default_rng(RECIPE["seed"]).permutation(len(data))
-        total_steps = math.ceil(len(data)/RECIPE["effective_pairs"])
+        batches = batch_boundaries(len(data))
+        total_steps = len(batches)
+        milestones = set(RECIPE["checkpoint_pairs"]) | {len(data)}
         opt, step, seen, history = optimizer(model), 0, 0, []
         existing = sorted(directory.glob("step-*.pt")) if directory.exists() else []
         if existing:
@@ -351,7 +373,7 @@ def train(c, *, resume=False):
             torch.set_rng_state(checkpoint["torch_rng"].cpu())
             if torch.cuda.is_available():
                 torch.cuda.set_rng_state_all([s.cpu() for s in checkpoint["cuda_rng"]])
-            if seen != min(step*RECIPE["effective_pairs"], len(data)):
+            if not 0 <= step <= total_steps or seen != (batches[step-1][1] if step else 0):
                 raise ValueError("Reward resume data cursor is inconsistent")
         else:
             scores = predict(model, dev, range(len(dev)), inputs["pad"])
@@ -363,8 +385,11 @@ def train(c, *, resume=False):
         started, initial_seen = time.monotonic(), seen
         torch.cuda.reset_peak_memory_stats() if torch.cuda.is_available() else None
         while seen < len(data):
+            start, end = batches[step]
+            if start != seen:
+                raise ValueError("Reward batch cursor does not match the exact milestone plan")
             step += 1
-            indices = order[seen:seen+RECIPE["effective_pairs"]]
+            indices = order[start:end]
             multiplier = learning_rate_multiplier(step, total_steps, RECIPE["warmup_ratio"], RECIPE["minimum_learning_rate_ratio"])
             for group, rate in zip(opt.param_groups, (RECIPE["adapter_learning_rate"], RECIPE["head_learning_rate"])):
                 group["lr"] = rate*multiplier
@@ -373,26 +398,35 @@ def train(c, *, resume=False):
             progress = {"step": step, "total_steps": total_steps, "pairs_seen": seen, "training_pairs": len(data),
                         "last_update": statistics, "elapsed_seconds": time.monotonic()-started,
                         "pairs_per_second": (seen-initial_seen)/(time.monotonic()-started), "best_step": best[0]}
-            if step % 16 == 0 or seen == len(data):
+            if step % 16 == 0 or seen in milestones:
                 write_json(run.file(f"{PREFIX}/progress.json"), progress, overwrite=True)
                 print(f"reward-lora progress {progress}", flush=True)
-            if step % RECIPE["checkpoint_steps"] == 0 or seen == len(data):
+            if step % RECIPE["checkpoint_steps"] == 0 or seen in milestones:
                 scores = predict(model, dev, range(len(dev)), inputs["pad"])
                 metrics = logit_metrics(scores[:, 0]-scores[:, 1], dev.labels)
                 if metrics["bt_nll"] < best[1]:
                     best = (step, metrics["bt_nll"])
-                history.append({"step": step, "pairs_seen": seen, "development": metrics})
+                prediction = run.file(f"{PREFIX}/development/pairs-{seen:06d}.npz")
+                save_npz(prediction, ids=dev.ids, scores=scores, labels=dev.labels)
+                history.append({"step": step, "pairs_seen": seen, "development": metrics,
+                                "requested_milestone": seen in milestones,
+                                "development_predictions": str(prediction.relative_to(run.path))})
                 _save_checkpoint(directory/f"step-{step:06d}.pt", model, opt, step, seen, best, history, contract)
                 print(f"reward-lora development step={step} {metrics}", flush=True)
         report = {"recipe": RECIPE, "training_pairs": len(data), "pairs_seen": seen, "optimizer_steps": step,
                   "best_step": best[0], "best_development_bt_nll": best[1], "history": history,
                   "selected_checkpoint": f"{PREFIX}/checkpoints/step-{best[0]:06d}.pt",
                   "last_checkpoint": f"{PREFIX}/checkpoints/step-{step:06d}.pt",
+                  "milestone_checkpoints": {str(r["pairs_seen"]): f"{PREFIX}/checkpoints/step-{r['step']:06d}.pt"
+                                            for r in history if r["pairs_seen"] in milestones},
+                  "one_shuffled_pass": True, "full_schedule_continuous_checkpoints": True,
+                  "fresh_head_no_full_pool_label_warmstart": True,
                   "peak_gpu_bytes": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0,
                   "PPO_started": False, "final_test_used": False}
         marker = run.file(f"{PREFIX}/training.json")
         write_json(marker, report)
-        seal_and_publish(run, stage, [marker, *sorted(directory.glob("step-*.pt"))],
+        seal_and_publish(run, stage, [marker, *sorted(directory.glob("step-*.pt")),
+                                     *sorted(run.file(f"{PREFIX}/development").glob("pairs-*.npz"))],
                          [run.receipt_path("lora-reward-data"), run.receipt_path(smoke_stage)],
                          metadata={"best_step": best[0], "steps": step}, code_paths=sources(), context=RECIPE)
         return report
@@ -402,12 +436,12 @@ def score(c, shard_index, shards):
     import torch
     if type(shards) is not int or not 1 <= shards <= 50 or not 0 <= shard_index < shards:
         raise ValueError("Invalid Reward scoring shard coverage")
-    run, stage = Run(c), f"lora-reward-score-{shard_index:03d}-of-{shards:03d}"
+    run, stage = Run(c), f"{STAGE_PREFIX}-score-{shard_index:03d}-of-{shards:03d}"
     marker = run.file(f"{PREFIX}/scores/part-{shard_index:03d}-of-{shards:03d}.npz")
     with stage_lock(run, stage):
         if run.completed(stage):
             return {"completed": stage}
-        run.require("lora-reward-train")
+        run.require(f"{STAGE_PREFIX}-train")
         training = read_json(run.file(f"{PREFIX}/training.json"))
         run, inputs, model, data, dev, _ = _load(c)
         checkpoint = torch.load(run.file(training["selected_checkpoint"]), map_location="cpu", weights_only=False)
@@ -418,25 +452,25 @@ def score(c, shard_index, shards):
             arrays.update({f"{split}_indices": indices, f"{split}_ids": dataset.ids[indices],
                            f"{split}_scores": predict(model, dataset, indices, inputs["pad"])})
         save_npz(marker, **arrays)
-        seal_and_publish(run, stage, [marker], [run.receipt_path("lora-reward-train")],
+        seal_and_publish(run, stage, [marker], [run.receipt_path(f"{STAGE_PREFIX}-train")],
                          metadata={"checkpoint_step": training["best_step"]}, code_paths=sources(),
                          context={"shards": shards, "index": shard_index})
         return {"completed": stage, "training_pairs": len(arrays["train_indices"])}
 
 
 def summarize(c, shards):
-    run, stage = Run(c), "lora-reward-report"
+    run, stage = Run(c), f"{STAGE_PREFIX}-report"
     with stage_lock(run, stage):
         marker = run.file(f"{PREFIX}/summary.json")
         if run.completed(stage):
             return read_json(marker)
         training = read_json(run.file(f"{PREFIX}/training.json"))
-        inputs = [run.receipt_path("lora-reward-train")]
-        datasets = {s: PackedPairs(run.file(f"{PREFIX}/{p}")) for s, p in (("training", "train"), ("development", "dev"))}
+        inputs = [run.receipt_path(f"{STAGE_PREFIX}-train")]
+        datasets = {s: PackedPairs(run.file(f"{CACHE_PREFIX}/{p}")) for s, p in (("training", "train"), ("development", "dev"))}
         merged = {s: np.full((len(d), 2), np.nan) for s, d in datasets.items()}
         coverage = {s: np.zeros(len(d), dtype=int) for s, d in datasets.items()}
         for index in range(shards):
-            name = f"lora-reward-score-{index:03d}-of-{shards:03d}"
+            name = f"{STAGE_PREFIX}-score-{index:03d}-of-{shards:03d}"
             run.require(name)
             inputs.append(run.receipt_path(name))
             with np.load(run.file(f"{PREFIX}/scores/part-{index:03d}-of-{shards:03d}.npz"), allow_pickle=False) as f:
@@ -460,10 +494,26 @@ def summarize(c, shards):
             a = merged["development"][mask]
             subsets[subset] = logit_metrics(a[:, 0]-a[:, 1], datasets["development"].labels[mask])
         baseline = read_json(run.file("diagnostics/full-pool-reward/l2-0.01/report.json"))
+        learning_curve = []
+        for row in training["history"]:
+            if not row.get("requested_milestone"):
+                continue
+            with np.load(run.file(row["development_predictions"]), allow_pickle=False) as f:
+                if f["ids"].tolist() != datasets["development"].ids.tolist() or not np.array_equal(f["labels"], datasets["development"].labels):
+                    raise ValueError("Milestone development prediction identities/labels changed")
+                scores = f["scores"]
+            independent = logit_metrics(scores[:, 0]-scores[:, 1], datasets["development"].labels)
+            if abs(independent["bt_nll"]-row["development"]["bt_nll"]) > 1e-12:
+                raise ValueError("Milestone development metric recomputation disagrees")
+            learning_curve.append({"pairs_seen": row["pairs_seen"], "step": row["step"], "development": independent})
+        targets = {n for n in RECIPE["checkpoint_pairs"] if n < len(datasets["training"])} | {len(datasets["training"])}
+        if [r["pairs_seen"] for r in learning_curve] != sorted(targets):
+            raise ValueError("Requested Reward milestone coverage is incomplete")
         report = {"recipe": RECIPE, **metrics, "development_subsets": subsets, "best_step": training["best_step"],
                   "linear_baseline": {s: baseline[s] for s in datasets},
                   "development_accuracy_change": metrics["development"]["accuracy"]-baseline["development"]["accuracy"],
                   "full_training_rescored_at_one_selected_checkpoint": True, "independent_shard_coverage_passed": True,
+                  "learning_curve": learning_curve, "milestone_checkpoints": training["milestone_checkpoints"],
                   "diagnostic_only": True, "PPO_started": False, "final_test_used": False}
         write_json(marker, report)
         seal_and_publish(run, stage, [marker], inputs, metadata={"passed": True}, code_paths=sources(), context=RECIPE)
