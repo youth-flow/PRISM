@@ -1,5 +1,7 @@
 # PRISM 工作约定
 
+- **Reward LoRA暂停（2026-11-17 20:56，最新用户指令优先）**：用户明确“你别训练reward等一下”。已保存Slurm元数据并普通scancel：micro4验收1987542、全量训练1987543、评分数组1987548[0–6]/1987549[7–8]均CANCELLED，全部0秒/0分配，完整LoRA训练从未开始。仅此前独立micro1工程验收1987513做过2次小batch更新，未覆盖正式头/基座，模型进程已结束。operator持久lora-admission=false，未获用户新的明确启动决定，不得重提Reward LoRA反向验收/训练/评分；PPO admission也仍false。CPU纯测试1987541已提交，可完成但不放行任何GPU后序。此前micro4源a7fac61只完成本机6项，生产测试状态以实查为准，不得把取消验收说成通过。私有暂停证据local/v3-execution/lora-pause/20261117T125652Z。允许只读分析/汇报与必要暂停记录，不因旧全量授权自行恢复。
+
 - **LoRA工程与吞吐更新**：4b9d298生产SIF1987490为402 passed，token准备1987491通过（72354903 train token/最长2012），真实4090验收1987513通过（12060672训练参数，FP32初始分数最大差4.539e-6，基座hash不变，峰值7.474GiB）。旧入口1987493因提交GPU名字缺空格在模型加载前失败11秒，保留失败并计资源。根据显存余量将micro由1对增至4对，有效64对/步、数学BT平均/L2不变，每64对内按长度分组；新代码已通过micro1/4更新一致、精确梯度和恢复等本机6项，须新生产全库及micro4最长样本GPU验收后正式训练。原完整token缓存/旧验收文件不可覆盖，仅复用同字节token，训练记录实际micro4。PPO继续暂停。
 
 - **全池Reward LoRA诊断授权（2026-11-17，最新用户指令优先）**：用户明确要求“在全量数据上试试lora backbone+线性头”，覆盖旧诊断不动backbone的范围，但不恢复PPO或改正式PRISM协议。独立diagnostics/full-pool-lora-reward：159682全训练对，同一官方HH test中固定2048开发对（上下文排除train/最终500/PPO开发512，seed13，非未调参最终测试）；OLMo1B FP32冻结原权重，Q/K/V/O及MLP gate/up/down LoRA r16/alpha32/dropout0，EOS无bias线性头从全池L2=.01头初始化，adapter零增量。先一epoch/有效64对/micro1对，adapter2e-5/head1e-4，3%warmup余弦至10%，显式头L2=.01/adapter AdamW decay=.01、clip1，非重入gradient checkpoint，无回答截断。先本机与生产SIF检查、真实最长样本单卡验收，再单卡训练；开发NLL选checkpoint（含初始基线），完整训练集另行同checkpoint分片重评分，不能把混合时点online准确率冒称最终训练准确率。正式配置/Design/抽样/14k Reward/定标和PPO admission=false保留；不调用API。正常检查15–30min，异常/验收节点立即处理，普通推origin/v3。
