@@ -22,7 +22,7 @@ RECIPE = {
     "protocol": "v3_full_pool_reward_lora_v1", "seed": 11,
     "rank": 16, "alpha": 32, "dropout": 0.,
     "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    "epochs": 1, "effective_pairs": 64, "micro_pairs": 1,
+    "epochs": 1, "effective_pairs": 64, "micro_pairs": 4,
     "adapter_learning_rate": 2e-5, "head_learning_rate": 1e-4,
     "head_l2": .01, "adapter_weight_decay": .01,
     "adam_betas": [.9, .999], "adam_epsilon": 1e-8,
@@ -185,10 +185,16 @@ def update(model, opt, data, indices, pad, recipe=RECIPE):
     model.train()
     opt.zero_grad(set_to_none=True)
     total = 0.
-    for index in indices:
-        scores = model(data.pair(int(index)), pad)
-        z = scores[0] - scores[1]
-        loss = F.softplus(z) - int(data.labels[index])*z
+    # Sorting only within this optimizer batch reduces padding. Every pair
+    # retains exactly 1/len(indices) weight and remains in the same update.
+    ordered = sorted(map(int, indices), key=lambda i: max(map(len, data.pair(i))))
+    for start in range(0, len(ordered), recipe["micro_pairs"]):
+        micro = ordered[start:start+recipe["micro_pairs"]]
+        sequences = [seq for i in micro for seq in data.pair(i)]
+        scores = model(sequences, pad).reshape(-1, 2)
+        z = scores[:, 0] - scores[:, 1]
+        y = torch.as_tensor(data.labels[micro], device=z.device, dtype=torch.float32)
+        loss = (F.softplus(z)-y*z).sum()
         if not torch.isfinite(loss):
             raise ValueError("Nonfinite Reward pair loss")
         total += loss.detach().item()
@@ -207,12 +213,16 @@ def predict(model, data, indices, pad):
     import torch
     was_training = model.training
     model.eval()
-    result = []
+    indices = list(map(int, indices))
+    result = np.empty((len(indices), 2), dtype=np.float32)
+    ordered = sorted(range(len(indices)), key=lambda j: max(map(len, data.pair(indices[j]))))
     with torch.no_grad():
-        for index in indices:
-            result.append(model(data.pair(int(index)), pad).cpu().numpy())
+        for start in range(0, len(ordered), RECIPE["micro_pairs"]):
+            locations = ordered[start:start+RECIPE["micro_pairs"]]
+            sequences = [seq for j in locations for seq in data.pair(indices[j])]
+            result[locations] = model(sequences, pad).reshape(-1, 2).cpu().numpy()
     model.train(was_training)
-    scores = np.asarray(result, dtype=np.float32).reshape(-1, 2)
+    scores = result
     if not np.isfinite(scores).all():
         raise ValueError("Nonfinite Reward predictions")
     return scores
@@ -223,7 +233,10 @@ def _load(c):
     run = Run(c)
     run.require("lora-reward-data")
     report = read_json(run.file(f"{PREFIX}/data.json"))
-    if report["recipe"] != RECIPE or report["recipe_sha256"] != hash_json(RECIPE):
+    original_recipe = report["recipe"]
+    if (report["recipe_sha256"] != hash_json(original_recipe)
+            or {k:v for k,v in original_recipe.items() if k != "micro_pairs"}
+            != {k:v for k,v in RECIPE.items() if k != "micro_pairs"}):
         raise ValueError("Packed Reward inputs belong to another recipe")
     with np.load(run.file("diagnostics/full-pool-reward/l2-0.01/weights.npz"), allow_pickle=False) as f:
         weights = f["w"]
@@ -236,10 +249,10 @@ def _load(c):
 
 def smoke(c):
     import torch
-    run, stage = Run(c), "lora-reward-smoke"
+    run, stage = Run(c), f"lora-reward-smoke-micro{RECIPE['micro_pairs']}"
     with stage_lock(run, stage):
         if run.completed(stage):
-            return read_json(run.file(f"{PREFIX}/smoke.json"))
+            return read_json(run.file(f"{PREFIX}/smoke-micro{RECIPE['micro_pairs']}.json"))
         run, inputs, model, train, dev, weights = _load(c)
         before = frozen_hash(model)
         count = min(8, len(dev))
@@ -256,8 +269,8 @@ def smoke(c):
         torch.cuda.reset_peak_memory_stats() if torch.cuda.is_available() else None
         started = time.monotonic()
         # Include the longest real pair in backward, then a second independent update.
-        history = [update(model, opt, train, [inputs["training"]["longest_pair_index"], 0], inputs["pad"]),
-                   update(model, opt, train, [1, 2], inputs["pad"])]
+        history = [update(model, opt, train, [inputs["training"]["longest_pair_index"]]*RECIPE["micro_pairs"], inputs["pad"]),
+                   update(model, opt, train, list(range(RECIPE["micro_pairs"])), inputs["pad"])]
         final = trainable_state(model)
         changed = [name for name in initial if not torch.equal(initial[name], final[name])]
         if (before != frozen_hash(model) or "head.weight" not in changed
@@ -272,7 +285,7 @@ def smoke(c):
                   "peak_gpu_bytes": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0,
                   "longest_sequence_tokens": inputs["training"]["max_sequence_tokens"],
                   "PPO_started": False}
-        path = run.file(f"{PREFIX}/smoke.json")
+        path = run.file(f"{PREFIX}/smoke-micro{RECIPE['micro_pairs']}.json")
         write_json(path, report)
         seal_and_publish(run, stage, [path], [run.receipt_path("lora-reward-data"), run.receipt_path("features")],
                          metadata={"passed": True}, code_paths=sources(), context=RECIPE)
@@ -315,7 +328,8 @@ def train(c, *, resume=False):
     with stage_lock(run, stage):
         if run.completed(stage):
             return read_json(run.file(f"{PREFIX}/training.json"))
-        run.require("lora-reward-smoke")
+        smoke_stage = f"lora-reward-smoke-micro{RECIPE['micro_pairs']}"
+        run.require(smoke_stage)
         run, inputs, model, data, dev, _ = _load(c)
         directory = run.file(f"{PREFIX}/checkpoints")
         contract = {"recipe_sha256": hash_json(RECIPE), "input_receipt": digest(run.receipt_path("lora-reward-data")),
@@ -379,7 +393,7 @@ def train(c, *, resume=False):
         marker = run.file(f"{PREFIX}/training.json")
         write_json(marker, report)
         seal_and_publish(run, stage, [marker, *sorted(directory.glob("step-*.pt"))],
-                         [run.receipt_path("lora-reward-data"), run.receipt_path("lora-reward-smoke")],
+                         [run.receipt_path("lora-reward-data"), run.receipt_path(smoke_stage)],
                          metadata={"best_step": best[0], "steps": step}, code_paths=sources(), context=RECIPE)
         return report
 

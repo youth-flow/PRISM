@@ -87,6 +87,16 @@ def test_gradient_accumulation_matches_pair_mean_including_short_last_batch():
             assert torch.allclose(p.grad, q.grad, atol=2e-7, rtol=1e-5)
 
 
+def test_microbatch_one_and_four_match_actual_updates():
+    model, recipe = fixture()
+    other = deepcopy(model)
+    a, b = optimizer(model, recipe), optimizer(other, recipe)
+    update(model, a, Data(), [0, 1, 2], 37, {**recipe, "micro_pairs": 1})
+    update(other, b, Data(), [0, 1, 2], 37, {**recipe, "micro_pairs": 4})
+    for name, value in trainable_state(model).items():
+        assert torch.allclose(value, trainable_state(other)[name], atol=2e-6, rtol=1e-5)
+
+
 def test_checkpoint_resume_reproduces_next_actual_adam_step(tmp_path):
     model, recipe = fixture()
     opt = optimizer(model, recipe)
