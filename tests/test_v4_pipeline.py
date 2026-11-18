@@ -56,6 +56,90 @@ def test_v4_full_frozen_head_does_not_require_geometry_or_design(tmp_path):
     assert not run.receipt_path("sampling").exists()
 
 
+def test_linear_reward_resumes_same_one_pass_and_scores_heldout(tmp_path, monkeypatch):
+    import numpy as np
+    from prism.io import write_rows
+    from prism.v3.reward import save_npz
+    from prism.v4 import linear_reward as curve
+    from v3_helpers import configuration, numerical_run
+
+    c = configuration(tmp_path)
+    c.pop("_contract")
+    c.update(protocol="hh_finite_pool_v4", schema_version=4)
+    run = numerical_run(c)
+    manifest = run.file("features/manifest.json")
+    write_json(manifest, {"pool_rows": 6})
+    audit = run.file("diagnostics/cohort-audit.json")
+    write_json(audit, {"passed": True})
+    run.publish("cohort-audit", [audit])
+    run.receipt_path("geometry").unlink()
+    monkeypatch.setattr(curve, "PARTIAL_BUDGETS", (2, 3, 5))
+    monkeypatch.setattr(curve, "BATCH", 2)
+
+    advance = curve._advance
+    seen = []
+
+    def interrupt_at_second_update(features, labels, ids, arrays, step, options):
+        if step == 2:
+            raise RuntimeError("interrupted")
+        seen.extend(ids)
+        return advance(features, labels, ids, arrays, step, options)
+
+    monkeypatch.setattr(curve, "_advance", interrupt_at_second_update)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        curve.train(c)
+    checkpoint = run.require("linear-reward-2")
+
+    def record_update(features, labels, ids, arrays, step, options):
+        seen.extend(ids)
+        return advance(features, labels, ids, arrays, step, options)
+
+    monkeypatch.setattr(curve, "_advance", record_update)
+    reports = curve.train(c)
+    expected = np.random.default_rng(c["study"]["seed"]).permutation(6)
+    assert seen == expected.tolist()
+    assert run.require("linear-reward-2") == checkpoint
+    assert [r["training_pairs"] for r in reports] == [2, 3, 5, 6]
+    assert [r["optimizer_steps"] for r in reports] == [1, 2, 3, 4]
+
+    test = run.file(f"{curve.PREFIX}/test.jsonl")
+    write_rows(test, [{"id": "heldout", "label": 1}])
+    test_report = run.file(f"{curve.PREFIX}/test-data.json")
+    write_json(test_report, {"test_pairs": 1})
+    run.publish("linear-test-data", [test, test_report])
+    features = run.file(f"{curve.PREFIX}/test-features.npz")
+    save_npz(features, ids=np.array(["heldout"]), indices=np.array([0]), phi=np.ones((1, 2, 3), dtype=np.float32))
+    run.publish("linear-test-features", [features], [run.receipt_path("linear-test-data")])
+    report = curve.summarize(c)
+    assert report["independent_audit_passed"]
+    assert all(r["test"]["bt_nll"] == pytest.approx(np.log(2)) for r in report["checkpoints"])
+    assert [r["training"]["pairs"] for r in report["checkpoints"]] == [2, 3, 5, 6]
+
+
+def test_linear_reward_holdout_excludes_contexts_and_conflicted_labels(tmp_path):
+    import gzip
+    import json
+    from prism.v3.data import canonical_pair
+    from prism.v4.linear_reward import _test_rows
+
+    def raw(prompt, chosen="answer one", rejected="answer two"):
+        context = f"\n\nHuman: {prompt}\n\nAssistant: "
+        return {"chosen": context + chosen, "rejected": context + rejected}
+
+    blocked = canonical_pair(raw("blocked"), {})[0]["prompt_id"]
+    records = [raw("blocked", "other", "answers"), raw("held out"), raw("held out"),
+               raw("conflict"), raw("conflict", "answer two", "answer one")]
+    source = tmp_path / "test.jsonl.gz"
+    with gzip.open(source, "wt", encoding="utf-8") as stream:
+        for record in records:
+            stream.write(json.dumps(record) + "\n")
+    groups = [({"split": "test", "subset": "helpful-base"}, source)]
+    heldout, counts = _test_rows({"data": {"expected_test_rows": len(records)}}, groups, {blocked})
+    assert [r["messages"][0]["content"] for r in heldout] == ["held out"]
+    assert counts["excluded_context_overlap_rows"] == 1
+    assert counts["conflicting_pairs"] == 1
+
+
 def test_v4_judge_offline_transport_and_separate_ledger(tmp_path, monkeypatch):
     from test_v3_evaluation import fixture, generate_all, fake_http
     from prism.v3.evaluation import export_judge, run_local, import_judge, aggregate

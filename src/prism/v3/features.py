@@ -90,7 +90,7 @@ class HFPairScorer:
         return np.stack([r[0] for r in scored]), np.asarray([r[1] for r in scored])
 
 
-def _arrays(records, indices, scorer, dimension):
+def _arrays(records, indices, scorer, dimension, *, progress=None):
     phi = np.empty((len(indices), 2, dimension), dtype=np.float32)
     logp = np.empty((len(indices), 2), dtype=np.float64)
     for j, index in enumerate(indices):
@@ -100,6 +100,8 @@ def _arrays(records, indices, scorer, dimension):
                 or np.any(probabilities > 1e-6)):
             raise ValueError(f"Invalid human-answer feature/logp at {records[index]['id']}")
         phi[j], logp[j] = features, probabilities
+        if progress and (j + 1) % 500 == 0:
+            print(f"{progress} pairs={j+1}/{len(indices)}", flush=True)
     return {"indices": np.asarray(indices, dtype=np.int64), "phi": phi, "logp": logp,
             "ids": np.asarray([records[i]["id"] for i in indices], dtype="U64")}
 
@@ -131,7 +133,8 @@ def _extract_features(c, shard_index=0, shards=1, *, scorer=None):
     scorer = HFPairScorer(c) if scorer is None else scorer
     started = time.monotonic()
     dimension = c["data"]["feature_dimension"]
-    pool_arrays = _arrays(pool, list(range(shard_index, len(pool), shards)), scorer, dimension)
+    progress = f"v4 feature shard={shard_index}" if c.get("protocol") == "hh_finite_pool_v4" else None
+    pool_arrays = _arrays(pool, list(range(shard_index, len(pool), shards)), scorer, dimension, progress=progress)
     dev_arrays = _arrays(dev, list(range(shard_index, len(dev), shards)), scorer, dimension)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as stream:

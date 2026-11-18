@@ -115,15 +115,75 @@ def download_model(c):
     return report
 
 
-def model_smoke(c):
+def stage_model(c, source_manifest):
+    """Verify the offline transfer and install its pinned cache entry without copying weights."""
+    import os
+    from tempfile import TemporaryDirectory
+    from transformers import AutoConfig
+    from prism.v3.recovery import stage_lock
+
+    require_runtime(c)
+    run, stage = Run(c), "model-download"
+    marker = run.file("diagnostics/model-download.json")
+    with stage_lock(run, stage):
+        if run.completed(stage):
+            return read_json(marker)
+        manifest = Path(source_manifest).resolve()
+        value = read_json(manifest)
+        if value["model"] != c["model"]:
+            raise ValueError("Offline model transfer does not match the pinned model")
+        files = value["files"]
+        if any(Path(name).name != name or name.startswith(".") for name in files):
+            raise ValueError("Offline model manifest contains unsafe paths")
+        required = {"config.json", "tokenizer.json", "tokenizer_config.json", "model.safetensors.index.json"}
+        if not required <= files.keys():
+            raise ValueError("Offline model transfer lacks model/tokenizer assets")
+        index = read_json(manifest.parent / "model.safetensors.index.json")
+        if {name for name in files if name.endswith(".safetensors")} != set(index["weight_map"].values()):
+            raise ValueError("Offline model transfer does not contain exactly the indexed weight shards")
+        for name, spec in files.items():
+            path = manifest.parent / name
+            if path.stat().st_size != spec["bytes"] or digest(path) != spec["sha256"]:
+                raise ValueError(f"Offline model file differs from the verified local download: {name}")
+        cfg = AutoConfig.from_pretrained(str(manifest.parent), local_files_only=True, trust_remote_code=False)
+        if cfg.model_type != "olmo3" or cfg.hidden_size != 4096:
+            raise ValueError("Wrong transferred architecture")
+        repo = "models--" + c["model"]["id"].replace("/", "--")
+        snapshots = Path(os.environ["PRISM_HF_CACHE_LOCATION"]) / "hub" / repo / "snapshots"
+        snapshots.mkdir(parents=True, exist_ok=True)
+        revision = c["model"]["revision"]
+        target = snapshots / revision
+        if target.exists():
+            for name, spec in files.items():
+                if digest(target / name) != spec["sha256"]:
+                    raise ValueError(f"Existing pinned snapshot file differs: {name}")
+        else:
+            with TemporaryDirectory(dir=snapshots, prefix=f".{revision}-") as directory:
+                staging = Path(directory) / revision
+                staging.mkdir()
+                for name in files:
+                    os.link(manifest.parent / name, staging / name)
+                staging.rename(target)
+        report = {**value, "snapshot_revision": revision, "model_type": cfg.model_type,
+                  "hidden_size": cfg.hidden_size, "transfer_verified": True, "api_calls": 0}
+        write_json(marker, report)
+        run.publish(stage, [marker], [manifest])
+        return report
+
+
+def model_smoke(c, profile=0):
     import torch
     from prism.hf import generate, prompt_ids, sequence_stats as dense_stats
     from prism.v3.ppo import load_model, load_tokenizer
     from .models import sequence_stats
     require_runtime(c)
     run = Run(c)
-    if run.completed("model-smoke"):
-        return read_json(run.file("diagnostics/model-smoke.json"))
+    if profile < 0:
+        raise ValueError("Model smoke profile must be nonnegative")
+    stage = "model-smoke" if profile == 0 else f"model-smoke-{profile}"
+    path = run.file(f"diagnostics/{stage}.json")
+    if run.completed(stage):
+        return read_json(path)
     model, tokenizer = load_model(c).requires_grad_(False), load_tokenizer(c)
     if model.config.model_type != "olmo3" or model.config.hidden_size != 4096:
         raise ValueError("Wrong V4 model architecture")
@@ -141,10 +201,12 @@ def model_smoke(c):
               "chunked_dense_logp_error": abs(ell - ref_ell), "eos_feature_equal": True,
               "generated_tokens": len(response), "external_pad": tokenizer.pad_token_id,
               "peak_cuda_bytes": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0,
+              "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+              "device_total_bytes": torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else 0,
               "formal_ppo_episodes": 0, "api_calls": 0}
-    path = run.file("diagnostics/model-smoke.json")
     write_json(path, report)
-    run.publish("model-smoke", [path])
+    inputs = [run.receipt_path("model-download")] if run.completed("model-download") else []
+    run.publish(stage, [path], inputs)
     return report
 
 

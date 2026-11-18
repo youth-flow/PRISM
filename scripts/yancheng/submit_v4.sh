@@ -7,7 +7,7 @@ if [[ "${1:-}" == --dry-run ]]; then dry=1; shift; fi
 stage="${1:?Supply a V4 compute stage}"; shift
 gpu=0; cpus=2; memory=3G; duration=01:00:00
 case "$stage" in
-  extract-features|prepare-shared|evaluate-generate) gpu=1; cpus=4; memory=64G; duration=12:00:00 ;;
+  extract-features|linear-test-features|prepare-shared|evaluate-generate) gpu=1; cpus=4; memory=64G; duration=12:00:00 ;;
   policy)
     [[ -f "${PRISM_V4_POLICY_ADMISSION:-}" ]] || prism_die "V4 formal PPO admission is closed; run policy-smoke for engineering"
     gpu=1; cpus=8; memory=64G; duration=48:00:00 ;;
@@ -17,6 +17,8 @@ case "$stage" in
   prepare-data) cpus=16; memory=24G; duration=04:00:00 ;;
   merge-features) cpus=16; memory=24G; duration=04:00:00 ;;
   reward|audit-training|full-pool-reward|full-pool-reward-report) cpus=32; memory=48G; duration=04:00:00 ;;
+  linear-test-data) cpus=8; memory=12G; duration=02:00:00 ;;
+  linear-reward-train|linear-reward-report) cpus=16; memory=24G; duration=02:00:00 ;;
   cpu-smoke|runtime-bootstrap) cpus=4; memory=6G; duration=01:00:00 ;;
   validate|plan|status|runtime-check|cohort-audit|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate) ;;
   *) prism_die "Unsupported V4 compute stage; paid Judges run locally: $stage" ;;

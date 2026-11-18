@@ -18,6 +18,14 @@
 
 全池冻结头诊断可直接从`phi_A-phi_B`拟合，不依赖K/Design。L2=.001/.01/.1，同一2048开发集按BT NLL选择；报告训练/开发准确率、NLL、Brier、ECE和来源子集，独立复算梯度和指标。500题不选参，诊断不覆盖正式Reward。
 
+### 单次训练的线性 Reward 学习曲线
+
+2026-11-18 用户授权先做全池冻结线性头，完成 Reward 后汇报。用 seed 11 打乱有效 HH 训练对，同一个无偏置线性头从零开始，FP64 Adam、学习率 0.001、显式 L2=0.01、每步最多 256 对，完整走一遍。批次在 10000、50000、100000 和全量边界切开，以该步实际对数归一。每个 checkpoint 保存头、Adam 一阶和二阶矩、步数及已见前缀 SHA。中断时从最后一个已验证 checkpoint 继续。
+
+`linear-test-data` 从固定 HH raw manifest 重建官方测试集的留出部分，按上下文排除整个训练池、2048 Reward 开发对、PPO 开发及最终 500 题。重复比较折叠，标签冲突剔除，使用同一 7B tokenizer 完整编码。可与训练特征提取并行运行 `linear-test-features`。特征归并后执行 `linear-reward-train`，独立 `linear-reward-report` 加载四个已保存的头，核对真实步数和前缀，分别重算已见训练对、共用开发集和留出测试集的准确率、BT NLL、Brier 与 ECE。测试集只进入评分。产物在 `diagnostics/linear-reward-curve`，包含四个权重和学习曲线 CSV。
+
+若计算节点无法访问公开模型服务，从本机获取固定版本并核验官方 LFS SHA256 或 Git blob ID。把文件和 SHA256 manifest 上传到独立 online1 目录，CPU 节点用 `download-model --source-manifest /absolute/path/to/verified-model.json` 校验并安装离线快照。
+
 ## 六阶段与新预算
 
 | 阶段 | V4实现 |

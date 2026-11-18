@@ -30,8 +30,9 @@ def _inputs(c, run):
             v, ids = file["v"], file["ids"].astype(str)
     else:
         with np.load(run.file("features/pool.npz"), allow_pickle=False) as file:
-            phi = file["phi"].astype(np.float64)
-            v, ids = phi[:, 0] - phi[:, 1], file["ids"].astype(str)
+            phi = file["phi"]
+            v = np.subtract(phi[:, 0], phi[:, 1], dtype=np.float64)
+            ids = file["ids"].astype(str)
         del phi
     label_rows = rows(run.file("data/labels.jsonl"))
     labels = {r["id"]: r["label"] for r in label_rows}

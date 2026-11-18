@@ -36,7 +36,7 @@ opts=(--cleanenv --no-home --bind "$PRISM_V4_SOURCE_DIR:/opt/prism:ro"
   --env "OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}" --env "OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}"
   --env "MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}" --env "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-1}"
   --env "SLURM_JOB_ID=$SLURM_JOB_ID" --env TOKENIZERS_PARALLELISM=false)
-opts+=(--env "PRISM_STORAGE=$PRISM_STORAGE")
+opts+=(--env "PRISM_STORAGE=$PRISM_STORAGE" --env "PRISM_HF_CACHE_LOCATION=$PRISM_HF_CACHE")
 if [[ "${PRISM_STAGE_RESOURCE:?}" == gpu ]]; then
   prism_check_gpu_partition
   opts+=(--nv --env "PRISM_GPU_MODEL=${PRISM_GPU_MODEL:-A100}")
