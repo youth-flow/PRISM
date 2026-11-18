@@ -43,7 +43,8 @@ def initialize_process_group(*, allowed_world_sizes=(4, 8)):
         raise ValueError("LOCAL_RANK is outside the visible CUDA device set")
     torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend="nccl", timeout=timedelta(hours=2))
+        dist.init_process_group(backend="nccl", timeout=timedelta(hours=2),
+                                device_id=torch.device("cuda", local_rank))
     if dist.get_world_size() != world or dist.get_rank() != rank:
         raise RuntimeError("torchrun environment and process group disagree")
     return rank, world, local_rank
@@ -54,7 +55,10 @@ def rank0():
 
 
 def barrier():
-    dist.barrier()
+    if dist.get_backend() == "nccl":
+        dist.barrier(device_ids=[torch.cuda.current_device()])
+    else:
+        dist.barrier()
 
 
 def broadcast_object(value, source=0):

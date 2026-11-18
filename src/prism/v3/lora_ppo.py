@@ -24,6 +24,7 @@ METHOD = "full-pool-lora"
 PREFIX = "diagnostics/full-pool-lora-ppo"
 STAGE_PREFIX = "lora-ppo"
 PILOT_EPISODE = 8192
+EXECUTION_MICRO_BATCH_SIZE = 1
 RECIPE = {
     "protocol": "v3_full_pool_lora_reward_distributed_ppo_v2",
     "purpose": "causal_test_of_strong_reward_ppo_vs_sft",
@@ -36,6 +37,8 @@ RECIPE = {
     "pilot_episode": PILOT_EPISODE,
     "distributed_world_sizes": [4, 8],
     "distributed_strategy": "homogeneous_synchronous_global_batch_gradient_sum",
+    "execution_micro_batch_size": EXECUTION_MICRO_BATCH_SIZE,
+    "execution_gradient_accumulation_steps": 64,
     "formal_prism_comparison": False,
     "paid_api_calls": 0,
 }
@@ -77,6 +80,22 @@ def sources():
     return [Path(__file__), folder / "lora_reward.py", folder / "ppo.py",
             folder / "ppo_trainer.py", folder / "distributed_ppo.py",
             folder / "ppo_math.py"]
+
+
+def _distributed_execution_settings(settings):
+    """Change placement granularity only; preserve the global PPO update."""
+    value = dict(settings)
+    mini = value["mini_batch_size"]
+    micro = EXECUTION_MICRO_BATCH_SIZE
+    if mini % micro:
+        raise ValueError("Distributed execution microbatch must divide the global minibatch")
+    value["per_device_train_batch_size"] = micro
+    value["gradient_accumulation_steps"] = mini // micro
+    if (value["rollout_batch_size"] != mini * value["num_mini_batches"]
+            or value["rollout_batch_size"] != micro * value["gradient_accumulation_steps"]
+                                            * value["num_mini_batches"]):
+        raise ValueError("Distributed execution changed the global PPO batch")
+    return value
 
 
 def _selected_reward(run):
@@ -403,7 +422,7 @@ def policy_smoke(c):
         smoke_context = {"recipe": RECIPE, "ppo_recipe": PPO_RECIPE,
                          "reward": recovery_identity,
                          "shape": {"world_size": world, "global_rollout": global_batch,
-                                   "local_rollout": 4, "micro": 2,
+                                   "local_rollout": 4, "micro": 1,
                                    "response_tokens": 512, "generation_chunk": 4,
                                    "force_full_length": True}}
         def validate_recovered_smoke():
@@ -412,7 +431,7 @@ def policy_smoke(c):
                     or recovered.get("forced_response_tokens") != 512
                     or recovered.get("distributed_world_size") != world
                     or recovered.get("local_rollout_batch_size") != 4
-                    or recovered.get("train_micro_batch_size") != 2):
+                    or recovered.get("train_micro_batch_size") != 1):
                 raise ValueError("Recovered LoRA PPO smoke did not pass")
         recovered = (recover_stage(run, stage, smoke_outputs, smoke_inputs,
                                    code_paths=sources(), validator=validate_recovered_smoke,
@@ -427,8 +446,8 @@ def policy_smoke(c):
         parity = _initial_terminal_parity(critic, reward, records, token.pad_token_id)
         settings = dict(c["ppo"])
         settings.update(total_episodes=global_batch, rollout_batch_size=global_batch,
-                        mini_batch_size=2*world, per_device_train_batch_size=2,
-                        gradient_accumulation_steps=world, num_mini_batches=2,
+                        mini_batch_size=2*world, per_device_train_batch_size=1,
+                        gradient_accumulation_steps=2*world, num_mini_batches=2,
                         num_ppo_epochs=1, response_length=512,
                         local_rollout_forward_batch_size=4,
                         engineering_checkpoint=global_batch,
@@ -473,7 +492,7 @@ def policy_smoke(c):
                  "reward_parameter_tensors": len(reward_versions),
                  "frozen_reward_unchanged": True, "formal_policy_admitted": False,
                  "distributed_world_size": world, "global_rollout_batch_size": global_batch,
-                 "local_rollout_batch_size": 4, "train_micro_batch_size": 2,
+                 "local_rollout_batch_size": 4, "train_micro_batch_size": 1,
                  "generation_forward_batch_size": 4, "forced_response_tokens": 512,
                  "longest_prompt_tokens": max(map(len, prompts)),
                  "shortest_selected_prompt_tokens": min(map(len, prompts)),
@@ -826,17 +845,20 @@ def train_policy(c, *, stop_after_episodes, resume=False):
             write_json(contract_path, {"protocol": RECIPE["protocol"], "contract_hash": contract,
                                        "method": METHOD, "reward": identity,
                                        "distributed_world_size": world,
+                                       "execution_micro_batch_size": EXECUTION_MICRO_BATCH_SIZE,
                                        "initial_critic_reward_eos_max_error": parity})
         barrier()
         seed_everything(c["study"]["seed"])
         calibration = rows(run.file("shared/calibration.jsonl"))
+        execution_settings = _distributed_execution_settings(c["ppo"])
         warmup_path = target / "critic-warmup.json"
         if not resume:
             count = c["ppo"]["critic_warmup_episodes"]
             heldout = calibration[count:count+min(128, len(calibration)-count)]
             warmup = prefit_critic_distributed(
                 critic, reward, calibration[:count], heldout,
-                settings=c["ppo"], pad=token.pad_token_id, seed=c["study"]["seed"])
+                settings=execution_settings, pad=token.pad_token_id,
+                seed=c["study"]["seed"])
             warmup.update(initial_critic_reward_eos_max_error=parity,
                           initialization="copied_reward_adapter_and_normalized_head")
             if not warmup["passed_performance"]:
@@ -845,7 +867,8 @@ def train_policy(c, *, stop_after_episodes, resume=False):
                    for record in rows(run.file("data/policy.jsonl"))]
         engine = DistributedPPOEngine(
             actor, critic, reward, prompts, pad=token.pad_token_id,
-            eos=token.eos_token_id, settings=c["ppo"], seed=c["study"]["seed"],
+            eos=token.eos_token_id, settings=execution_settings,
+            seed=c["study"]["seed"],
             contract_hash=contract, checkpoint_dir=target / "checkpoints")
 
         def probe(instance):
@@ -876,6 +899,8 @@ def train_policy(c, *, stop_after_episodes, resume=False):
                       reward_checkpoint=identity["checkpoint"],
                       total_episodes=c["ppo"]["total_episodes"], executor=PROTOCOL,
                       distributed_world_size=world,
+                      execution_micro_batch_size=execution_settings["per_device_train_batch_size"],
+                      execution_gradient_accumulation_steps=execution_settings["gradient_accumulation_steps"],
                       critic="independent_reward_initialized_lora_plus_scalar_head",
                       normalization=normalizer, formal_prism_comparison=False)
         if not rank0():

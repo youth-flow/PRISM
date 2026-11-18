@@ -8,6 +8,7 @@ torch = pytest.importorskip("torch")
 
 from prism.v3.artifacts import Run, write_json
 from prism.v3.lora_ppo import (FrozenLoRANormalizedReward,
+                               _distributed_execution_settings,
                                _ensure_critic_warmup_receipt, _selected_reward,
                                _validate_transition)
 from prism.v3.lora_reward import RECIPE as REWARD_RECIPE
@@ -27,6 +28,19 @@ class ScalarModel(torch.nn.Module):
 def config(tmp_path):
     return {"output": str(tmp_path / "run"),
             "ppo": {"checkpoints": [8192, 16384, 32768, 65536]}}
+
+
+def test_distributed_microbatch_change_preserves_global_batch_and_steps():
+    frozen = {"rollout_batch_size": 128, "mini_batch_size": 64,
+              "num_mini_batches": 2, "per_device_train_batch_size": 2,
+              "gradient_accumulation_steps": 32}
+    actual = _distributed_execution_settings(frozen)
+    assert frozen["per_device_train_batch_size"] == 2
+    assert actual["per_device_train_batch_size"] == 1
+    assert actual["gradient_accumulation_steps"] == 64
+    assert (actual["per_device_train_batch_size"]
+            * actual["gradient_accumulation_steps"]
+            * actual["num_mini_batches"] == actual["rollout_batch_size"])
 
 
 def test_frozen_lora_scorer_appends_only_missing_eos_and_normalizes():

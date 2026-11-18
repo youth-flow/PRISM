@@ -1,5 +1,7 @@
 # PRISM 工作约定
 
+- **8卡PPO首次实卡smoke显存修正（2026-11-18 19:03）**：定标1991463已COMPLETED/0，用时4:37，mean=2.0794086353262173、std=1.6529422808483623，4096条FP64/ddof0复核归一化均值6.94e-18/标准差1，step2304 Reward身份不变。8×4090 smoke1991464在三模型成功加载并进入最坏512-token反向后OOM：每卡约43.60/44.52GiB、再需1.75GiB，FAILED/1、3:17；依赖PPO1991465从未启动/0秒，已保存元数据并普通取消。修复仅把物理micro2→1、累积32→64，保持全局rollout128/minibatch64/2 minibatches/4 epochs、有效token分母、SUM梯度、优化步数和学习率日程不变；smoke对应累积改为2×world。另显式绑定NCCL device_id，不放宽任何一致性/显存闸门。须新生产全库及8卡最坏形状smoke通过后重提2048。
+
 - **多卡PPO生产放行与正式队列（2026-11-18 18:55）**：不可变源ef3c6b4的生产SIF全库1991446为424 passed/0 failed，2:59、峰值661640K，包含Linux 4-rank精确恢复和真实OLMo2多进程测试；GPU闸门正式打开。4090节点gpu045实查8卡全空、104 CPU、约1007GiB主存，已提交定标1991463（1×4090，实际RUNNING并通过单卡GPU smoke）→8卡最坏形状同步smoke1991464（64CPU/512G，afterok）→2048 episode正式首关1991465（8×4090/64CPU/512G，afterok）。1991464/65仍是PENDING/Dependency，不能记为已运行；全链固定ef3c6b4、原V3配置SHA34878097、FP32/TF32关闭、API0。
 
 - **多卡PPO第二轮生产测试修复（2026-11-18 18:48）**：49036b6的生产SIF全库1991423为423 passed/1 failed，2:33、仅4 CPU、0GPU；原四类失败均已通过。唯一剩余失败为新增纯测试fixture连续训练后按rank改变了RNG，却在构建下一独立subject前未重置Critic随机head，checkpoint正确拒绝了rank间初值分歧；正式模型路径本来就在每次构建前固定seed并加载相同SFT权重。fixture已在每个subject前显式固定模型种子，仍须新commit第三次跑生产全库；不得放宽生产参数一致性检查。
