@@ -25,7 +25,7 @@ PREFIX = "diagnostics/full-pool-lora-ppo"
 STAGE_PREFIX = "lora-ppo"
 PILOT_EPISODE = 8192
 RECIPE = {
-    "protocol": "v3_full_pool_lora_reward_ppo_v1",
+    "protocol": "v3_full_pool_lora_reward_distributed_ppo_v2",
     "purpose": "causal_test_of_strong_reward_ppo_vs_sft",
     "method": METHOD,
     "reward_checkpoint": "development_bt_nll_selected_full_pool_schedule",
@@ -34,6 +34,8 @@ RECIPE = {
     "actor_initialization": "sft_zero_lora",
     "engineering_episode": 2048,
     "pilot_episode": PILOT_EPISODE,
+    "distributed_world_sizes": [4, 8],
+    "distributed_strategy": "homogeneous_synchronous_global_batch_gradient_sum",
     "formal_prism_comparison": False,
     "paid_api_calls": 0,
 }
@@ -73,7 +75,8 @@ def _require_ppo_recipe(c):
 def sources():
     folder = Path(__file__).resolve().parent
     return [Path(__file__), folder / "lora_reward.py", folder / "ppo.py",
-            folder / "ppo_trainer.py", folder / "ppo_math.py"]
+            folder / "ppo_trainer.py", folder / "distributed_ppo.py",
+            folder / "ppo_math.py"]
 
 
 def _selected_reward(run):
@@ -367,68 +370,92 @@ def _build_models(c):
 
 
 def policy_smoke(c):
-    """One worst-shape PPO update with parity, memory and immutability guards."""
+    """One worst-shape synchronous update with memory and immutability guards."""
     import torch
+    from contextlib import nullcontext
+    from filelock import FileLock
     from prism.hf import prompt_ids
-    from .ppo_trainer import PPOEngine, _trainable_state, seed_everything
+    from .ppo_trainer import _trainable_state, seed_everything
+    from .distributed_ppo import (DistributedPPOEngine, barrier, broadcast_object,
+                                  initialize_process_group, rank0)
     _require_ppo_recipe(c)
+    rank, world, _ = initialize_process_group()
     run, stage = Run(c), f"{STAGE_PREFIX}-smoke"
     marker = run.file(f"{PREFIX}/smoke.json")
-    with stage_lock(run, stage):
-        if run.completed(stage):
+    lock_path = run.file(f"control/locks/{stage}.lock")
+    if rank0():
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    barrier()
+    lock = FileLock(str(lock_path), timeout=0) if rank0() else nullcontext()
+    with lock:
+        completed = run.completed(stage) if rank0() else None
+        completed = broadcast_object(completed)
+        if completed:
             return read_json(marker)
-        run.require(f"{STAGE_PREFIX}-normalization")
+        if rank0():
+            run.require(f"{STAGE_PREFIX}-normalization")
         _, recovery_identity = _selected_reward(run)
         folder = run.file(f"{PREFIX}/smoke-checkpoints")
-        smoke_outputs = [marker, folder / "episode-00000004.pt", folder / "latest.json"]
+        global_batch = 4 * world
+        checkpoint = folder / f"episode-{global_batch:08d}.pt"
+        smoke_outputs = [marker, checkpoint, folder / "latest.json"]
         smoke_inputs = [run.receipt_path(f"{STAGE_PREFIX}-normalization")]
         smoke_context = {"recipe": RECIPE, "ppo_recipe": PPO_RECIPE,
                          "reward": recovery_identity,
-                         "shape": {"rollout": 4, "micro": 2, "response_tokens": 512,
-                                   "generation_chunk": 4, "force_full_length": True}}
+                         "shape": {"world_size": world, "global_rollout": global_batch,
+                                   "local_rollout": 4, "micro": 2,
+                                   "response_tokens": 512, "generation_chunk": 4,
+                                   "force_full_length": True}}
         def validate_recovered_smoke():
             recovered = read_json(marker)
             if (recovered.get("passed") is not True
                     or recovered.get("forced_response_tokens") != 512
-                    or recovered.get("rollout_batch_size") != 4
+                    or recovered.get("distributed_world_size") != world
+                    or recovered.get("local_rollout_batch_size") != 4
                     or recovered.get("train_micro_batch_size") != 2):
                 raise ValueError("Recovered LoRA PPO smoke did not pass")
-        if recover_stage(run, stage, smoke_outputs, smoke_inputs, code_paths=sources(),
-                         validator=validate_recovered_smoke,
-                         context=smoke_context):
+        recovered = (recover_stage(run, stage, smoke_outputs, smoke_inputs,
+                                   code_paths=sources(), validator=validate_recovered_smoke,
+                                   context=smoke_context) if rank0() else None)
+        recovered = broadcast_object(recovered)
+        if recovered:
             return read_json(marker)
+        barrier()
         seed_everything(c["study"]["seed"])
         actor, critic, reward, token, normalizer, identity = _build_models(c)
         records = rows(run.file("shared/calibration.jsonl"))[:4]
         parity = _initial_terminal_parity(critic, reward, records, token.pad_token_id)
         settings = dict(c["ppo"])
-        settings.update(total_episodes=4, rollout_batch_size=4, mini_batch_size=4,
-                        per_device_train_batch_size=2, gradient_accumulation_steps=2,
-                        num_mini_batches=1, num_ppo_epochs=1, response_length=512,
+        settings.update(total_episodes=global_batch, rollout_batch_size=global_batch,
+                        mini_batch_size=2*world, per_device_train_batch_size=2,
+                        gradient_accumulation_steps=world, num_mini_batches=2,
+                        num_ppo_epochs=1, response_length=512,
                         local_rollout_forward_batch_size=4,
-                        engineering_checkpoint=4, durable_checkpoint_interval=4,
-                        checkpoints=[4], probability_check_rows=4)
+                        engineering_checkpoint=global_batch,
+                        durable_checkpoint_interval=global_batch,
+                        checkpoints=[global_batch], probability_check_rows=4)
         encoded = [prompt_ids(token, row["messages"], c["data"]["max_prompt_tokens"])
                    for row in rows(run.file("data/policy.jsonl"))]
-        if len(encoded) < 4:
-            raise ValueError("Full-shape LoRA PPO smoke needs four policy prompts")
+        if len(encoded) < global_batch:
+            raise ValueError("Distributed full-shape smoke lacks policy prompts")
         prompts = [value for _, value in sorted(enumerate(encoded),
-                                                key=lambda item: (-len(item[1]), item[0]))[:4]]
+                                                key=lambda item: (-len(item[1]), item[0]))[:global_batch]]
         seed_everything(c["study"]["seed"])
         before_actor, before_critic = _trainable_state(actor), _trainable_state(critic)
         reward_versions = {n: p._version for n, p in reward.model.named_parameters()}
         contract = hash_json({"config": run.fingerprint, "reward": identity,
                               "normalization": digest(run.file(f"{PREFIX}/normalization.json")),
-                              "recipe": RECIPE, "sources": {p.name: digest(p) for p in sources()}})
-        engine = PPOEngine(actor, critic, reward, prompts, pad=token.pad_token_id,
-                           eos=-1, settings=settings, seed=c["study"]["seed"],
-                           contract_hash=contract, checkpoint_dir=folder)
+                              "recipe": RECIPE, "world_size": world,
+                              "sources": {p.name: digest(p) for p in sources()}})
+        engine = DistributedPPOEngine(
+            actor, critic, reward, prompts, pad=token.pad_token_id, eos=-1,
+            settings=settings, seed=c["study"]["seed"], contract_hash=contract,
+            checkpoint_dir=folder)
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
-        checkpoint = folder / "episode-00000004.pt"
         if checkpoint.is_file() or (folder / "latest.json").is_file():
             engine.resume()
-            if engine.completed_episodes != 4:
+            if engine.completed_episodes != global_batch:
                 raise ValueError("Recovered LoRA PPO smoke checkpoint has the wrong episode")
         result = engine.run()
         after_actor, after_critic = _trainable_state(actor), _trainable_state(critic)
@@ -437,22 +464,27 @@ def policy_smoke(c):
                 or any(p._version != reward_versions[n] for n, p in reward.model.named_parameters())
                 or result["history"][-1]["mean_response_tokens"] != 512.):
             raise ValueError("LoRA PPO smoke did not update actor/critic while preserving Reward")
-        value = {"protocol": "v3_full_pool_lora_ppo_smoke_v2", "passed": True,
+        peak = torch.tensor(float(torch.cuda.max_memory_allocated()), dtype=torch.float64,
+                            device=next(actor.parameters()).device)
+        torch.distributed.all_reduce(peak, op=torch.distributed.ReduceOp.MAX)
+        value = {"protocol": "v3_full_pool_lora_distributed_ppo_smoke_v3", "passed": True,
                  "initial_critic_reward_eos_max_error": parity,
                  "reward_checkpoint": identity, "normalization": normalizer,
                  "reward_parameter_tensors": len(reward_versions),
                  "frozen_reward_unchanged": True, "formal_policy_admitted": False,
-                 "rollout_batch_size": 4, "train_micro_batch_size": 2,
+                 "distributed_world_size": world, "global_rollout_batch_size": global_batch,
+                 "local_rollout_batch_size": 4, "train_micro_batch_size": 2,
                  "generation_forward_batch_size": 4, "forced_response_tokens": 512,
                  "longest_prompt_tokens": max(map(len, prompts)),
                  "shortest_selected_prompt_tokens": min(map(len, prompts)),
                  "result": result, "api_calls": 0,
-                 "peak_cuda_bytes": torch.cuda.max_memory_allocated() if torch.cuda.is_available() else 0}
-        write_json(marker, value)
-        outputs = [marker, folder / "episode-00000004.pt", folder / "latest.json"]
-        seal_and_publish(run, stage, outputs, smoke_inputs,
-                         metadata={"passed": True}, code_paths=sources(),
-                         context=smoke_context)
+                 "peak_cuda_bytes": int(peak)}
+        if rank0():
+            write_json(marker, value)
+            seal_and_publish(run, stage, smoke_outputs, smoke_inputs,
+                             metadata={"passed": True, "world_size": world},
+                             code_paths=sources(), context=smoke_context)
+        barrier()
         return value
 
 
@@ -553,7 +585,7 @@ def evaluate_probe(c, engine, run, name, identity):
 
 
 def _checkpoint_steps(c, state, episode, contract_hash):
-    from .ppo_trainer import PROTOCOL
+    from .distributed_ppo import PROTOCOL
     expected = episode // c["ppo"]["rollout_batch_size"] * c["ppo"]["num_ppo_epochs"] * c["ppo"]["num_mini_batches"]
     if (state.get("protocol") != PROTOCOL or state.get("episode") != episode
             or state.get("contract_hash") != contract_hash):
@@ -708,7 +740,7 @@ def _validate_transition(c, run, stop_after_episodes, resume):
 def _ensure_critic_warmup_receipt(run, contract, warmup_path, identity):
     """Publish or recover the validated prefit + episode-0 bootstrap."""
     import torch
-    from .ppo_trainer import PROTOCOL
+    from .distributed_ppo import PROTOCOL
     stage = f"{STAGE_PREFIX}-critic-warmup"
     if run.completed(stage):
         return read_json(warmup_path)
@@ -744,22 +776,37 @@ def _ensure_critic_warmup_receipt(run, contract, warmup_path, identity):
 
 
 def train_policy(c, *, stop_after_episodes, resume=False):
-    """Train one isolated policy, with mandatory 2048 and 8192 stops."""
+    """Train one synchronous policy, with mandatory 2048 and 8192 stops."""
     import torch
+    import traceback
+    from contextlib import nullcontext
     from filelock import FileLock
     from prism.hf import prompt_ids
-    from .ppo import _save_critic, prefit_critic
-    from .ppo_trainer import PPOEngine, PROTOCOL, seed_everything
+    from .ppo import _save_critic
+    from .ppo_trainer import seed_everything
+    from .distributed_ppo import (DistributedPPOEngine, PROTOCOL, barrier,
+                                  broadcast_object, initialize_process_group,
+                                  prefit_critic_distributed, rank0)
     _require_ppo_recipe(c)
+    rank, world, _ = initialize_process_group()
     run = Run(c)
     target = run.file(f"policy/{METHOD}")
     target.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(target / ".execution.lock"), timeout=0):
-        for stage in ("data", "shared-sft", f"{REWARD_STAGE_PREFIX}-train",
-                      f"{REWARD_STAGE_PREFIX}-report", f"{STAGE_PREFIX}-normalization",
-                      f"{STAGE_PREFIX}-smoke"):
-            run.require(stage)
-        _validate_transition(c, run, stop_after_episodes, resume)
+    lock = FileLock(str(target / ".execution.lock"), timeout=0) if rank0() else nullcontext()
+    with lock:
+        failure = None
+        if rank0():
+            try:
+                for stage in ("data", "shared-sft", f"{REWARD_STAGE_PREFIX}-train",
+                              f"{REWARD_STAGE_PREFIX}-report", f"{STAGE_PREFIX}-normalization",
+                              f"{STAGE_PREFIX}-smoke"):
+                    run.require(stage)
+                _validate_transition(c, run, stop_after_episodes, resume)
+            except BaseException:
+                failure = traceback.format_exc()
+        failure = broadcast_object(failure)
+        if failure is not None:
+            raise RuntimeError("Distributed LoRA PPO admission failed:\n" + failure)
         seed_everything(c["study"]["seed"])
         actor, critic, reward, token, normalizer, identity = _build_models(c)
         parity = _initial_terminal_parity(critic, reward, rows(run.file("shared/calibration.jsonl"))[:4], token.pad_token_id)
@@ -771,30 +818,35 @@ def train_policy(c, *, stop_after_episodes, resume=False):
                               "policy_prompts": digest(run.file("data/policy.jsonl")),
                               "shared_sft": digest(run.receipt_path("shared-sft")),
                               "executor": PROTOCOL,
+                              "distributed_world_size": world,
                               "executor_sources": {p.name: digest(p) for p in sources()},
                               "recipe": RECIPE})
         contract_path = target / "contract.json"
-        write_json(contract_path, {"protocol": RECIPE["protocol"], "contract_hash": contract,
-                                   "method": METHOD, "reward": identity,
-                                   "initial_critic_reward_eos_max_error": parity})
+        if rank0():
+            write_json(contract_path, {"protocol": RECIPE["protocol"], "contract_hash": contract,
+                                       "method": METHOD, "reward": identity,
+                                       "distributed_world_size": world,
+                                       "initial_critic_reward_eos_max_error": parity})
+        barrier()
         seed_everything(c["study"]["seed"])
         calibration = rows(run.file("shared/calibration.jsonl"))
         warmup_path = target / "critic-warmup.json"
         if not resume:
             count = c["ppo"]["critic_warmup_episodes"]
             heldout = calibration[count:count+min(128, len(calibration)-count)]
-            warmup = prefit_critic(critic, reward, calibration[:count], heldout,
-                                   settings=c["ppo"], pad=token.pad_token_id,
-                                   seed=c["study"]["seed"])
+            warmup = prefit_critic_distributed(
+                critic, reward, calibration[:count], heldout,
+                settings=c["ppo"], pad=token.pad_token_id, seed=c["study"]["seed"])
             warmup.update(initial_critic_reward_eos_max_error=parity,
                           initialization="copied_reward_adapter_and_normalized_head")
             if not warmup["passed_performance"]:
                 raise RuntimeError("LoRA-initialized Critic did not pass heldout prefit")
         prompts = [prompt_ids(token, record["messages"], c["data"]["max_prompt_tokens"])
                    for record in rows(run.file("data/policy.jsonl"))]
-        engine = PPOEngine(actor, critic, reward, prompts, pad=token.pad_token_id,
-                           eos=token.eos_token_id, settings=c["ppo"], seed=c["study"]["seed"],
-                           contract_hash=contract, checkpoint_dir=target / "checkpoints")
+        engine = DistributedPPOEngine(
+            actor, critic, reward, prompts, pad=token.pad_token_id,
+            eos=token.eos_token_id, settings=c["ppo"], seed=c["study"]["seed"],
+            contract_hash=contract, checkpoint_dir=target / "checkpoints")
 
         def probe(instance):
             for name in ("train_probe", "dev_probe"):
@@ -805,20 +857,30 @@ def train_policy(c, *, stop_after_episodes, resume=False):
                 accept_pilot(c)
 
         if resume:
-            warmup = _ensure_critic_warmup_receipt(run, contract, warmup_path, identity)
+            if rank0():
+                warmup = _ensure_critic_warmup_receipt(run, contract, warmup_path, identity)
+            barrier()
             engine.resume(on_checkpoint=probe)
         else:
             engine.save_checkpoint(metadata={"critic_warmup": warmup})
-            _ensure_critic_warmup_receipt(run, contract, warmup_path, identity)
-        if stop_after_episodes > engine.completed_episodes and engine.completed_episodes >= PILOT_EPISODE:
+            if rank0():
+                _ensure_critic_warmup_receipt(run, contract, warmup_path, identity)
+            barrier()
+        if (rank0() and stop_after_episodes > engine.completed_episodes
+                and engine.completed_episodes >= PILOT_EPISODE):
             run.require(f"{STAGE_PREFIX}-admission")
+        barrier()
         result = engine.run(stop_after_episodes=stop_after_episodes, on_checkpoint=probe)
         result.update(method=METHOD, seed=c["study"]["seed"],
                       reward_training_pairs=identity["pairs_seen"],
                       reward_checkpoint=identity["checkpoint"],
                       total_episodes=c["ppo"]["total_episodes"], executor=PROTOCOL,
+                      distributed_world_size=world,
                       critic="independent_reward_initialized_lora_plus_scalar_head",
                       normalization=normalizer, formal_prism_comparison=False)
+        if not rank0():
+            barrier()
+            return result
         report_path = target / f"report-{engine.completed_episodes:08d}.json"
         if report_path.exists():
             previous = read_json(report_path)
@@ -830,6 +892,7 @@ def train_policy(c, *, stop_after_episodes, resume=False):
         else:
             write_json(report_path, result)
         if not result["completed"]:
+            barrier()
             return result
         run.require(f"{STAGE_PREFIX}-pilot-acceptance")
         run.require(f"{STAGE_PREFIX}-admission")
@@ -849,6 +912,8 @@ def train_policy(c, *, stop_after_episodes, resume=False):
                              f"{STAGE_PREFIX}-pilot-acceptance",
                              f"{STAGE_PREFIX}-admission")]],
                     metadata={"method": METHOD, "episodes": engine.completed_episodes,
+                              "distributed_world_size": world,
                               "executor": PROTOCOL, "completed": True,
                               "actual_optimizer_steps": result["actual_optimizer_steps"]})
+        barrier()
         return result

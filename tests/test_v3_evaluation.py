@@ -305,10 +305,25 @@ def test_v3_submit_resources_snapshot_paths_and_no_side_effects(platform):
     normalize = run("--dry-run", "lora-ppo-normalize", "--config", _shell_path(config))
     assert normalize.returncode == 0 and "--cpus-per-task=4" in normalize.stdout and "--mem=24G" in normalize.stdout
     smoke = run("--dry-run", "lora-ppo-smoke", "--config", _shell_path(config))
-    assert smoke.returncode == 0 and "--cpus-per-task=8" in smoke.stdout and "--mem=64G" in smoke.stdout
+    assert (smoke.returncode == 0 and "--cpus-per-task=32" in smoke.stdout
+            and "--mem=256G" in smoke.stdout and "--gres=gpu:4" in smoke.stdout)
     lora_policy = run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config),
                       "--stop-after-episodes", "2048")
-    assert lora_policy.returncode == 0 and "--cpus-per-task=8" in lora_policy.stdout and "--mem=64G" in lora_policy.stdout
+    assert (lora_policy.returncode == 0 and "--cpus-per-task=32" in lora_policy.stdout
+            and "--mem=256G" in lora_policy.stdout and "--gres=gpu:4" in lora_policy.stdout)
+    eight = run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config),
+                "--stop-after-episodes", "2048", overrides={"PRISM_DISTRIBUTED_GPUS": "8"})
+    assert (eight.returncode == 0 and "--cpus-per-task=64" in eight.stdout
+            and "--mem=512G" in eight.stdout and "--gres=gpu:8" in eight.stdout)
+    too_few_cpus = run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config),
+                       "--stop-after-episodes", "2048",
+                       overrides={"PRISM_CPUS": "16"})
+    assert too_few_cpus.returncode != 0 and "8 CPU cores per GPU" in too_few_cpus.stderr
+    too_little_memory = run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config),
+                            "--stop-after-episodes", "2048",
+                            overrides={"PRISM_MEMORY": "128G"})
+    assert (too_little_memory.returncode != 0
+            and "64 GiB host memory per GPU" in too_little_memory.stderr)
     lora_admit = run("--dry-run", "lora-ppo-admit", "--config", _shell_path(config),
                      "--user-lora-ppo-confirmed")
     assert lora_admit.returncode == 0 and "--cpus-per-task=2" in lora_admit.stdout and "--mem=3G" in lora_admit.stdout
@@ -328,6 +343,9 @@ def test_v3_submit_blocks_api_arrays_excess_memory_and_actual_submit(platform):
     # The GPU partition's host memory is not subjected to the CPU queue limit.
     assert run("--dry-run", "policy", "--config", _shell_path(config)).returncode == 0
     assert run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config)).returncode != 0
+    assert run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config),
+               "--stop-after-episodes", "2048",
+               overrides={"PRISM_DISTRIBUTED_GPUS": "6"}).returncode != 0
     assert run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config),
                "--stop-after-episodes", "2048", overrides={"PRISM_ARRAY": "0-1%1"}).returncode != 0
     array = run("--dry-run", "extract-features", "--config", _shell_path(config), "--shards", "32",

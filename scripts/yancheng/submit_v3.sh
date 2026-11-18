@@ -11,8 +11,8 @@ case "$stage" in
   lora-reward-train) gpu=1; cpus=8; memory=48G; duration=48:00:00 ;;
   lora-reward-smoke) gpu=1; cpus=4; memory=24G; duration=01:00:00 ;;
   lora-ppo-normalize) gpu=1; cpus=4; memory=24G; duration=04:00:00 ;;
-  lora-ppo-smoke) gpu=1; cpus=8; memory=64G; duration=01:00:00 ;;
-  lora-ppo-policy) gpu=1; cpus=8; memory=64G; duration=24:00:00 ;;
+  lora-ppo-smoke) gpu="${PRISM_DISTRIBUTED_GPUS:-4}"; cpus=$((gpu*8)); memory="$((gpu*64))G"; duration=02:00:00 ;;
+  lora-ppo-policy) gpu="${PRISM_DISTRIBUTED_GPUS:-4}"; cpus=$((gpu*8)); memory="$((gpu*64))G"; duration=24:00:00 ;;
   policy) gpu=1; cpus=8; memory=64G; duration=24:00:00 ;;
   model-smoke|shared-smoke) gpu=1; cpus=8; memory=64G; duration=01:00:00 ;;
   download-data) cpus=4; memory=6G; duration=04:00:00 ;;
@@ -47,20 +47,35 @@ if [[ "$stage" == lora-ppo-policy ]]; then
   done
   [[ "$stop_after" =~ ^[1-9][0-9]*$ ]] || prism_die "LoRA PPO policy requires an explicit positive --stop-after-episodes checkpoint"
 fi
+requested_cpus="${PRISM_CPUS:-$cpus}"
+requested_memory="${PRISM_MEMORY:-$memory}"
+if [[ "$stage" == lora-ppo-smoke || "$stage" == lora-ppo-policy ]]; then
+  [[ "$requested_cpus" =~ ^[1-9][0-9]*$ && $((requested_cpus%gpu)) -eq 0
+     && "$requested_cpus" -ge $((gpu*8)) ]] \
+    || prism_die "Distributed LoRA PPO requires at least 8 CPU cores per GPU, evenly divided"
+  [[ "$requested_memory" =~ ^([1-9][0-9]*)([MG])$ ]] \
+    || prism_die "Distributed LoRA PPO memory must be an integer M/G allocation"
+  memory_mib="${BASH_REMATCH[1]}"; memory_unit="${BASH_REMATCH[2]}"
+  [[ "$memory_unit" != G ]] || memory_mib=$((memory_mib*1024))
+  [[ "$memory_mib" -ge $((gpu*64*1024)) ]] \
+    || prism_die "Distributed LoRA PPO requires at least 64 GiB host memory per GPU"
+fi
 args=(--parsable --export=ALL --account="$PRISM_ACCOUNT" --nodes=1 --ntasks=1
-  --cpus-per-task="${PRISM_CPUS:-$cpus}" --mem="${PRISM_MEMORY:-$memory}" --time="${PRISM_TIME:-$duration}"
+  --cpus-per-task="$requested_cpus" --mem="$requested_memory" --time="${PRISM_TIME:-$duration}"
   --chdir="$PRISM_V3_SOURCE_DIR" --job-name="prism-v3-$stage"
   --output="$PRISM_LOGS/%x-%j.out" --error="$PRISM_LOGS/%x-%j.err")
-if [[ "$gpu" == 1 ]]; then
+if [[ "$gpu" != 0 ]]; then
   [[ "$PRISM_GPU_PARTITION" != *,* ]] || prism_die "V3 uses one verified GPU partition per submission"
-  [[ "${PRISM_GPU_GRES:-gpu:1}" =~ ^gpu(:[A-Za-z0-9_-]+)?:1$ ]] || prism_die "Exactly one GPU per V3 task"
-  args+=(--partition="$PRISM_GPU_PARTITION" --gres="${PRISM_GPU_GRES:-gpu:1}")
+  [[ "$gpu" == 1 || "$gpu" == 4 || "$gpu" == 8 ]] || prism_die "GPU count must be 1, 4 or 8"
+  [[ "${PRISM_GPU_GRES:-gpu:1}" =~ ^gpu(:[A-Za-z0-9_-]+)?:1$ ]] || prism_die "Base GRES must describe one GPU"
+  gpu_gres="${PRISM_GPU_GRES:-gpu:1}"
+  gpu_gres="${gpu_gres%:1}:$gpu"
+  args+=(--partition="$PRISM_GPU_PARTITION" --gres="$gpu_gres")
 else
   [[ "$PRISM_CPU_PARTITION" != FILL_* && "$PRISM_CPU_PARTITION" != "$PRISM_GPU_PARTITION" ]] || prism_die "Use a verified CPU partition"
   args+=(--partition="$PRISM_CPU_PARTITION")
 fi
 if [[ "$gpu" == 0 && "$PRISM_CPU_PARTITION" == q_amd_share ]]; then
-  requested_cpus="${PRISM_CPUS:-$cpus}"; requested_memory="${PRISM_MEMORY:-$memory}"
   [[ "$requested_cpus" =~ ^[1-9][0-9]*$ && "$requested_memory" =~ ^([1-9][0-9]*)([MG])$ ]] || prism_die "Use integer CPU cores and M/G memory for the verified CPU profile"
   memory_mib="${BASH_REMATCH[1]}"; unit="${BASH_REMATCH[2]}"
   [[ "$unit" != G ]] || memory_mib=$((memory_mib*1024))

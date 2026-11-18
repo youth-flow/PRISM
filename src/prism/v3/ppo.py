@@ -32,8 +32,10 @@ def configure_torch(c):
     if c["runtime"]["dtype"] != "float32" or c["runtime"].get("allow_tf32", False):
         raise ValueError("V3 models require full FP32 and disabled TF32")
     configure_numerics(c)
-    if c["runtime"]["device"] == "cuda" and (not torch.cuda.is_available() or torch.cuda.device_count() != 1):
-        raise ValueError("Run one V3 policy/model process per assigned single GPU")
+    distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
+    if c["runtime"]["device"] == "cuda" and (not torch.cuda.is_available()
+            or (torch.cuda.device_count() != 1 and not distributed)):
+        raise ValueError("Run one V3 process per GPU, or initialize the audited process group first")
     if os.environ.get("SLURM_CPUS_PER_TASK"):
         torch.set_num_threads(int(os.environ["SLURM_CPUS_PER_TASK"]))
 

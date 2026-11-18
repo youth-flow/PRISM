@@ -11,6 +11,11 @@ printf '%s  %s\n' "${PRISM_V3_SOURCE_MANIFEST_SHA256:?}" "$PRISM_V3_SOURCE_DIR/.
 (cd "$PRISM_V3_SOURCE_DIR" && sha256sum --check --status .source.sha256)
 printf '%s  %s\n' "${PRISM_IMAGE_SHA256:?}" "$PRISM_IMAGE" | sha256sum --check --status
 stage="${1:?Supply a V3 stage}"; shift
+distributed_gpus=1
+if [[ "$stage" == lora-ppo-smoke || "$stage" == lora-ppo-policy ]]; then
+  distributed_gpus="${PRISM_DISTRIBUTED_GPUS:-4}"
+  [[ "$distributed_gpus" == 4 || "$distributed_gpus" == 8 ]] || prism_die "Distributed LoRA PPO uses 4 or 8 homogeneous GPUs"
+fi
 if [[ "$stage" != cpu-smoke ]]; then
   printf '%s  %s\n' "${PRISM_CONFIG_SHA256:?}" "${PRISM_CONFIG_PATH:?}" | sha256sum --check --status
 fi
@@ -24,12 +29,18 @@ else
   export APPTAINER_CACHEDIR="$PRISM_APPTAINER_CACHE" APPTAINER_TMPDIR="$jobroot/tmp"
 fi
 unset OPENAI_API_KEY APPTAINERENV_OPENAI_API_KEY SINGULARITYENV_OPENAI_API_KEY
+threads="${SLURM_CPUS_PER_TASK:-1}"
+if [[ "$distributed_gpus" -gt 1 ]]; then
+  [[ "$threads" -ge "$distributed_gpus" && $((threads%distributed_gpus)) -eq 0 ]] || prism_die "CPU allocation must divide evenly across PPO ranks"
+  threads=$((threads/distributed_gpus))
+fi
 opts=(--cleanenv --no-home --bind "$PRISM_V3_SOURCE_DIR:/opt/prism:ro"
   --bind "$PRISM_STORAGE:$PRISM_STORAGE" --bind "$jobroot/home:/prism-home" --bind "$PRISM_HF_CACHE:/hf"
   --pwd /opt/prism --env HOME=/prism-home --env XDG_CACHE_HOME=/prism-home/.cache
   --env PYTHONPATH=/opt/prism/src --env HF_HOME=/hf --env TMPDIR="$jobroot/tmp"
-  --env "OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}" --env "OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}"
-  --env "MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK:-1}" --env "SLURM_CPUS_PER_TASK=${SLURM_CPUS_PER_TASK:-1}"
+  --env "OMP_NUM_THREADS=$threads" --env "OPENBLAS_NUM_THREADS=$threads"
+  --env "MKL_NUM_THREADS=$threads" --env "SLURM_CPUS_PER_TASK=$threads"
+  --env "PRISM_DISTRIBUTED_GPUS=$distributed_gpus" --env "PRISM_EXPECTED_GPU_COUNT=$distributed_gpus"
   --env "SLURM_JOB_ID=$SLURM_JOB_ID" --env TOKENIZERS_PARALLELISM=false)
 if [[ "${PRISM_STAGE_RESOURCE:?}" == gpu ]]; then
   prism_check_gpu_partition
@@ -75,4 +86,8 @@ if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score ]] || prism_die "Unexpected V3 array stage"
   cli+=(--shard-index "$SLURM_ARRAY_TASK_ID")
 fi
-"${runner[@]}" python -m prism.v3 "$stage" "${cli[@]}"
+if [[ "$distributed_gpus" -gt 1 ]]; then
+  "${runner[@]}" torchrun --standalone --nproc_per_node="$distributed_gpus" -m prism.v3 "$stage" "${cli[@]}"
+else
+  "${runner[@]}" python -m prism.v3 "$stage" "${cli[@]}"
+fi

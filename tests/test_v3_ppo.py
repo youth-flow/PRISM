@@ -16,6 +16,7 @@ from prism.v3.ppo import FrozenNormalizedReward, make_actor, make_critic, prefit
 from prism.v3.ppo_math import gae_reference
 from prism.v3.ppo_trainer import (PPOEngine, PromptSampler, gae, left_pad, optimizer_steps,
                                   prepare_inputs, response_masks, seed_everything, stream_generate)
+from prism.v3.distributed_ppo import DistributedPPOEngine
 
 
 @pytest.fixture(autouse=True)
@@ -73,6 +74,55 @@ def engine(path=None, micro=1, contract="fixture"):
 
 def trainable(model):
     return {k: p.detach().clone() for k, p in model.named_parameters() if p.requires_grad}
+
+
+def _distributed_resume_worker(rank, world, init_method, folder):
+    import torch.distributed as distributed
+    torch.set_num_threads(1)
+    distributed.init_process_group("gloo", rank=rank, world_size=world,
+                                   init_method=init_method)
+    try:
+        p = settings()
+        p.update(total_episodes=16, rollout_batch_size=8, mini_batch_size=4,
+                 per_device_train_batch_size=1, gradient_accumulation_steps=4,
+                 num_mini_batches=2, num_ppo_epochs=1,
+                 local_rollout_forward_batch_size=2, probability_check_rows=2,
+                 engineering_checkpoint=8, durable_checkpoint_interval=8,
+                 checkpoints=[8, 16])
+        prompts = [[1, 3 + (i % 20)] for i in range(16)]
+
+        def subject(path=None):
+            actor, critic, reward = models()
+            return DistributedPPOEngine(
+                actor, critic, reward, prompts, pad=37, eos=2, settings=p,
+                seed=11, contract_hash="distributed-fixture", checkpoint_dir=path)
+
+        continuous = subject()
+        continuous.run()
+        checkpoint = Path(folder) / "checkpoint"
+        interrupted = subject(checkpoint)
+        interrupted.run(stop_after_episodes=8)
+        resumed = subject(checkpoint)
+        resumed.resume()
+        result = resumed.run()
+        assert result["completed"] and resumed.history == continuous.history
+        for name, tensor in trainable(continuous.actor).items():
+            assert torch.equal(tensor, trainable(resumed.actor)[name])
+        for name, tensor in trainable(continuous.critic).items():
+            assert torch.equal(tensor, trainable(resumed.critic)[name])
+    finally:
+        distributed.destroy_process_group()
+
+
+def test_four_rank_synchronous_ppo_resume_matches_continuous(tmp_path):
+    import socket
+    import torch.multiprocessing as multiprocessing
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    multiprocessing.spawn(_distributed_resume_worker,
+                          args=(4, f"tcp://127.0.0.1:{port}", str(tmp_path)),
+                          nprocs=4, join=True)
 
 
 def test_real_olmo2_streaming_cached_and_full_paths_agree():

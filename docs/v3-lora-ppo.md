@@ -13,6 +13,8 @@
 
 保持原V3配方，隔离Reward质量这一变量：FP32且禁TF32；actor LoRA r16/alpha32/all-linear/dropout0；65536总episodes；rollout128、minibatch64×2、4 PPO epochs；actor LR 1e-5；critic adapter/head LR 3e-5/1e-4；5% warmup、cosine降至10%；KL .05；policy/value clip .2；gamma1、GAE lambda .95；vf coefficient .1；独立norm1梯度裁剪；不白化Reward、白化advantage；T1、top-p1、top-k0、回答cap512。
 
+正式执行使用单节点同型号GPU的4卡或8卡同步数据并行。每个rank持有同一全局rollout的连续不重叠切片；advantage矩、token分母、指标和梯度均做全局归并，梯度按SUM而不是默认平均。全局rollout128、minibatch64、epoch数、优化步数、学习率日程和prompt采样顺序因此不随卡数改变。checkpoint绑定world size、各rank RNG和训练参数hash，只允许相同卡数精确恢复。禁止把多个独立PPO段训练后平均，也禁止混合4090/A100做同步组。
+
 总horizon保持65536，使用绝对`--stop-after-episodes`分段，不能把配置临时缩成8192，否则会改变学习率日程。允许节点为2048、8192、16384、32768、65536。
 
 ## Reward定标与Critic
@@ -23,7 +25,7 @@ Critic是独立SFT feature backbone＋独立LoRA＋带bias value head。初始�
 
 ## 分阶段闸门
 
-1. `lora-ppo-smoke`：真实单卡一次最坏形状更新，选择全池最长的4个policy prompt，生成chunk=4、强制每条512 token，并以micro=2完成actor／critic反向；要求两者真更新、Reward base/adapter/head版本不变、Critic/Reward初始EOS误差小于2e-5、显存峰值和checkpoint可绑定恢复。这不是正式episodes。
+1. `lora-ppo-smoke`：真实4卡或8卡一次最坏形状同步更新，每卡选择4个长policy prompt，生成chunk=4、强制每条512 token，并以micro=2完成actor／critic反向；要求各rank参数一致、两者真更新、Reward base/adapter/head版本不变、Critic/Reward初始EOS误差小于2e-5、显存峰值和分布式checkpoint可绑定恢复。这不是正式episodes。
 2. `lora-ppo-policy --stop-after-episodes 2048`：强制首停。Critic预热、actor/critic各128个PPO optimizer步、固定train/dev probe、有限性和Reward运行时不可变检查全部通过，才发布工程验收。
 3. `lora-ppo-policy --resume --stop-after-episodes 8192`：强制第二停。训练probe平均Reward增益必须为正；512开发prompt的Reward增益和含KL RLHF目标的95%下界必须为正；Critic必须继续优于常数MC基线。另保存KL、长度差、EOS、重复率及Reward增益与长度差相关性。
 4. 8192自动性能闸门通过仍不自动继续。检查probe后，只有显式执行`lora-ppo-admit --user-lora-ppo-confirmed`才允许后续16k／32k／65k。
@@ -43,4 +45,4 @@ bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-policy --config "$cfg" --r
 bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-admit --config "$cfg" --user-lora-ppo-confirmed --execute
 ```
 
-normalize为1GPU/4CPU/24G，smoke和policy为1GPU/8CPU/64G；policy默认24小时只是作业时限，不代表完整horizon必然在24小时内结束。配置文件保持原字节，新增路径复用旧run的hash绑定资产并写入独立`diagnostics/full-pool-lora-ppo`、`policy/full-pool-lora`和`lora-ppo-*` receipts。
+normalize为1GPU/4CPU/24G。smoke和policy默认4张同型GPU、每卡至少8CPU/64G主存；设置`PRISM_DISTRIBUTED_GPUS=8`可在整节点空闲且同型时改为8卡。policy默认24小时只是单次作业时限，不代表完整horizon必然在24小时内结束。配置文件保持原字节，新增路径复用旧run的hash绑定资产并写入独立`diagnostics/full-pool-lora-ppo`、`policy/full-pool-lora`和`lora-ppo-*` receipts。

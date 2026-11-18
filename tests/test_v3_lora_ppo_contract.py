@@ -11,7 +11,7 @@ from prism.v3.lora_ppo import (FrozenLoRANormalizedReward,
                                _ensure_critic_warmup_receipt, _selected_reward,
                                _validate_transition)
 from prism.v3.lora_reward import RECIPE as REWARD_RECIPE
-from prism.v3.ppo_trainer import PROTOCOL
+from prism.v3.distributed_ppo import PROTOCOL
 
 
 class ScalarModel(torch.nn.Module):
