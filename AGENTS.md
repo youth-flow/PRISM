@@ -1,5 +1,7 @@
 # PRISM 工作约定
 
+- **多卡PPO生产放行与正式队列（2026-11-18 18:55）**：不可变源ef3c6b4的生产SIF全库1991446为424 passed/0 failed，2:59、峰值661640K，包含Linux 4-rank精确恢复和真实OLMo2多进程测试；GPU闸门正式打开。4090节点gpu045实查8卡全空、104 CPU、约1007GiB主存，已提交定标1991463（1×4090，实际RUNNING并通过单卡GPU smoke）→8卡最坏形状同步smoke1991464（64CPU/512G，afterok）→2048 episode正式首关1991465（8×4090/64CPU/512G，afterok）。1991464/65仍是PENDING/Dependency，不能记为已运行；全链固定ef3c6b4、原V3配置SHA34878097、FP32/TF32关闭、API0。
+
 - **多卡PPO第二轮生产测试修复（2026-11-18 18:48）**：49036b6的生产SIF全库1991423为423 passed/1 failed，2:33、仅4 CPU、0GPU；原四类失败均已通过。唯一剩余失败为新增纯测试fixture连续训练后按rank改变了RNG，却在构建下一独立subject前未重置Critic随机head，checkpoint正确拒绝了rank间初值分歧；正式模型路径本来就在每次构建前固定seed并加载相同SFT权重。fixture已在每个subject前显式固定模型种子，仍须新commit第三次跑生产全库；不得放宽生产参数一致性检查。
 
 - **多卡PPO首轮生产测试修复（2026-11-18 18:37）**：不可变源4899eed的生产SIF全库1991394为420 passed/4 failed，2:54、仅4 CPU、0GPU。失败均在GPU放行前暴露：新增Gloo fixture漏学习率日程字段；CPU测试容器继承`PRISM_DISTRIBUTED_GPUS=1`导致资源dry-run错配；两个此前本机旧Transformers跳过的真实OLMo2测试分别使用了非同源随机base fixture及过窄错误文案断言。已分别补齐fixture、只在实际GPU阶段转发多卡环境且lora阶段强制4/8卡、改为同一SFT base的独立深拷贝、校正断言；本机恢复专项12 passed/3 skipped、全库374 passed/19 skipped。不得把1991394记为生产通过，须新不可变commit重跑生产全库后才能提交定标/GPU smoke/PPO。
