@@ -18,7 +18,10 @@ from .artifacts import Run, hash_json, read_json, write_json
 def executor_sources():
     """Resume is bound to the numerical implementation, not merely its name."""
     folder = Path(__file__).resolve().parent
-    return {name: digest(folder / name) for name in ("ppo.py", "ppo_trainer.py", "ppo_math.py")}
+    paths = {name: folder / name for name in ("ppo.py", "ppo_trainer.py", "ppo_math.py")}
+    paths.update({"v4/" + name: folder.parent / "v4" / name for name in ("models.py", "acceptance.py")
+                  if (folder.parent / "v4" / name).exists()})
+    return {name: digest(path) for name, path in paths.items()}
 
 
 def hf_config(c):
@@ -502,6 +505,9 @@ def _train_policy(c, method, *, stop_after_episodes=None, resume=False):
         raise ValueError("V3 policy method must be empirical or prism")
     run = Run(c)
     run.selection()
+    if c.get("protocol") == "hh_finite_pool_v4":
+        from prism.v4.acceptance import require_policy_admission
+        require_policy_admission(c)
     for stage in ("data", "shared-sft", "reward", "normalization", "training-audit"):
         run.require(stage)
     if method == "prism":
@@ -517,19 +523,27 @@ def _train_policy(c, method, *, stop_after_episodes=None, resume=False):
                           "training_audit": digest(run.receipt_path("training-audit")),
                           "policy_prompts": digest(run.file("data/policy.jsonl")),
                           "shared_sft": digest(run.receipt_path("shared-sft")), "executor": PROTOCOL,
-                          "executor_sources": executor_sources()})
+                          "executor_sources": executor_sources(),
+                          **({"v4_admission": digest(run.file("control/policy-admission.json"))}
+                             if c.get("protocol") == "hh_finite_pool_v4" else {})})
     target = run.file(f"policy/{method}")
     write_json(target / "contract.json", {"protocol": PROTOCOL, "contract_hash": contract, "method": method})
     configure_torch(c)
     seed_everything(c["study"]["seed"])
     tokenizer = load_tokenizer(c)
-    actor = make_actor(load_model(c), c["ppo"])
-    critic = make_critic(load_model(c, causal=False), weights, normalizer["mean"], normalizer["std"], c["ppo"])
-    reward = FrozenNormalizedReward(load_model(c, causal=False), weights, normalizer["mean"], normalizer["std"],
-                                    eos=tokenizer.eos_token_id, pad=tokenizer.pad_token_id,
-                                    context_tokens=c["data"]["context_tokens"])
-    if {id(p) for p in critic.parameters()} & {id(p) for p in reward.backbone.parameters()}:
-        raise ValueError("Trainable critic must be independent of frozen reward")
+    if c.get("protocol") == "hh_finite_pool_v4":
+        from prism.v4.models import policy_models
+        actor, critic, reward = policy_models(load_model(c), weights, normalizer["mean"], normalizer["std"],
+                                              c["ppo"], eos=tokenizer.eos_token_id, pad=tokenizer.pad_token_id,
+                                              context_tokens=c["data"]["context_tokens"])
+    else:
+        actor = make_actor(load_model(c), c["ppo"])
+        critic = make_critic(load_model(c, causal=False), weights, normalizer["mean"], normalizer["std"], c["ppo"])
+        reward = FrozenNormalizedReward(load_model(c, causal=False), weights, normalizer["mean"], normalizer["std"],
+                                        eos=tokenizer.eos_token_id, pad=tokenizer.pad_token_id,
+                                        context_tokens=c["data"]["context_tokens"])
+        if {id(p) for p in critic.parameters()} & {id(p) for p in reward.backbone.parameters()}:
+            raise ValueError("Trainable critic must be independent of frozen reward")
     shared = rows(run.file("shared/calibration.jsonl"))
     warmup_path = target / "critic-warmup.json"
     if not resume:

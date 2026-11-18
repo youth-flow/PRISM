@@ -48,15 +48,18 @@ class Run:
         self.path = Path(config["output"]).resolve()
         self.fingerprint = config_hash(config)
         self._contract = config.get("_contract", {k: v for k, v in config.items() if not k.startswith("_")})
+        protocol = config.get("protocol", "hh_finite_pool_v3")
+        if protocol not in ("hh_finite_pool_v3", "hh_finite_pool_v4"):
+            raise ValueError("Unknown HH experiment protocol")
         marker = self.path / "experiment.json"
         if marker.exists():
             existing = read_json(marker)
-            if (existing.get("protocol") != "hh_finite_pool_v3"
+            if (existing.get("protocol") != protocol
                     or existing.get("config_sha256") != self.fingerprint
                     or hash_json(existing.get("config")) != self.fingerprint):
                 raise ValueError("V3 output already belongs to a different experiment contract")
         elif create:
-            write_json(marker, {"protocol": "hh_finite_pool_v3", "config_sha256": self.fingerprint,
+            write_json(marker, {"protocol": protocol, "config_sha256": self.fingerprint,
                                 "config": self._contract})
 
     def file(self, relative):

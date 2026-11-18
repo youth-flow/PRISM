@@ -196,4 +196,5 @@ def plan(c):
             "final_valid_judgments": c["data"]["evaluation_prompts"] * len(c["evaluation"]["comparisons"]) * len(c["evaluation"]["answer_orders"]),
             "paid_api_calls_enabled": c["execution"]["allow_paid_api_calls"],
             "evaluation_usd_ceiling": c["evaluation"]["budget_usd"],
+            "policy_admission": c.get("admission", {}).get("policy", None),
             "note": "Plan only; no dataset download, compute job, model, or API is started."}

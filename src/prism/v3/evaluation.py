@@ -24,6 +24,13 @@ JUDGE_KEYS = ("backend", "model", "api", "base_url", "api_key_env", "reasoning_e
               "service_tier", "max_output_tokens", "max_attempts", "timeout_seconds")
 
 
+def _packet_edition(packet):
+    editions = [v for v in ("v3", "v4") if packet.get(v, {}).get("protocol") == "hh_finite_pool_" + v]
+    if len(editions) != 1:
+        raise ValueError("Expected exactly one HH experiment identity in the Judge packet")
+    return editions[0]
+
+
 def _source_name(record):
     source = record.get("source", "unknown")
     return str(source.get("subset", "unknown")) if isinstance(source, dict) else str(source)
@@ -73,6 +80,9 @@ def _load_generator(c, method):
 def _logp(model, prompt, response):
     import torch
     from prism.numerics import selected_logprobs
+    if getattr(model.config, "model_type", None) == "olmo3":
+        from prism.v4.models import sequence_stats
+        return sequence_stats(model, prompt, response, model.config.eos_token_id)[1]
     with torch.no_grad():
         tokens = torch.tensor([prompt + response], device=next(model.parameters()).device)
         output = model(input_ids=tokens, attention_mask=torch.ones_like(tokens),
@@ -250,14 +260,15 @@ def export_judge(c):
                 tasks.append({"id": f"{comparison['name']}:{index}:{order}",
                               "messages": prompt["messages"], "left": sources[comparison["left"]][index]["response"],
                               "right": sources[comparison["right"]][index]["response"], "calls": calls})
-    packet = {"kind": "prism_local_judge", "version": 1, "stage": "evaluate-judge", "method": "paired-v3",
+    edition = "v4" if c["protocol"] == "hh_finite_pool_v4" else "v3"
+    packet = {"kind": "prism_local_judge", "version": 1, "stage": "evaluate-judge", "method": "paired-" + edition,
               "role": "evaluation", "budget": selection["budget"], "seed": c["study"]["seed"],
               "judge_protocol": judge_protocol("evaluation", "openai"), "settings": settings,
               "request_endpoint": APIJudge({"judges": {"evaluation": settings}}, "evaluation").url,
               "config_sha256": run.fingerprint,
               "input_sha256": {run._key(path): digest(path) for path in dependencies},
               "tasks": tasks, "prior_calls": [],
-              "v3": {"protocol": "hh_finite_pool_v3", "prompts": len(prompts),
+              edition: {"protocol": c["protocol"], "prompts": len(prompts),
                      "comparisons": c["evaluation"]["comparisons"], "valid_judgments": len(tasks)}}
     packet["packet_id"] = _hash(packet)
     target = run.file("judge/packet.json")
@@ -269,7 +280,8 @@ def _bound_packet(c, run):
     from prism.local_judge import _load_packet
     run.require("judge-export")
     packet = _load_packet(run.file("judge/packet.json"))
-    if packet.get("v3", {}).get("protocol") != "hh_finite_pool_v3" or packet["config_sha256"] != run.fingerprint or packet["settings"] != _settings(c):
+    edition = _packet_edition(packet)
+    if packet[edition]["protocol"] != c["protocol"] or packet["config_sha256"] != run.fingerprint or packet["settings"] != _settings(c):
         raise ValueError("Judge packet does not match this V3 study")
     for key, expected in packet["input_sha256"].items():
         if digest(run._resolve(key)) != expected:
@@ -282,6 +294,7 @@ def _billing_path(results):
 
 
 def _export_billing(budget, packet, results):
+    edition = _packet_edition(packet)
     with budget.transaction() as db:
         records = db.execute("SELECT id,purpose,model,payload_sha,reserved,charged,status,response,request_id FROM dispatch ORDER BY id").fetchall()
     keys = ("id", "purpose", "model", "payload_sha", "reserved_micro_usd", "charged_micro_usd", "status", "response", "request_id")
@@ -290,9 +303,9 @@ def _export_billing(budget, packet, results):
         entry["response"] = json.loads(entry["response"]) if entry["response"] is not None else None
         if not entry["id"].startswith(packet["packet_id"] + "/"):
             raise ValueError("V3 ledger contains another packet")
-    value = {"protocol": "v3_usd_dispatch_snapshot_v1", "packet_id": packet["packet_id"],
+    value = {"protocol": edition + "_usd_dispatch_snapshot_v1", "packet_id": packet["packet_id"],
              "results_sha256": digest(results) if Path(results).exists() else None,
-             "ledger_contract": read_json(budget.path.with_name(budget.path.name + ".v3.json")),
+             "ledger_contract": read_json(budget.path.with_name(budget.path.name + "." + edition + ".json")),
              "state": budget.state(), "dispatches": entries}
     write_json(_billing_path(results), value, overwrite=True)
     return value
@@ -301,7 +314,8 @@ def _export_billing(budget, packet, results):
 def _validate_billing(packet, results, billing):
     from prism.api_budget import request_reservation, usage_micro_usd, _flex_no_charge
     from prism.judges import APIJudge, _messages, _usage
-    if (billing.get("protocol") != "v3_usd_dispatch_snapshot_v1" or billing.get("packet_id") != packet["packet_id"]
+    edition = _packet_edition(packet)
+    if (billing.get("protocol") != edition + "_usd_dispatch_snapshot_v1" or billing.get("packet_id") != packet["packet_id"]
             or billing.get("results_sha256") != digest(results)):
         raise ValueError("V3 billing snapshot/result identity changed")
     entries = billing.get("dispatches", [])
@@ -369,7 +383,7 @@ def _validate_billing(packet, results, billing):
             raise ValueError("V3 zero/known settlement lacks original billing evidence")
     limit = billing["state"]["limits_usd"]
     contract = billing.get("ledger_contract", {})
-    if (contract.get("protocol") != "v3_judge_ledger_v1" or contract.get("packet_id") != packet["packet_id"]
+    if (contract.get("protocol") != edition + "_judge_ledger_v1" or contract.get("packet_id") != packet["packet_id"]
             or contract.get("config_sha256") != packet["config_sha256"]
             or type(contract.get("budget_usd")) not in (int, float)
             or not math.isfinite(contract["budget_usd"]) or contract["budget_usd"] <= 0):
@@ -456,7 +470,7 @@ def aggregate(c):
     comparisons = [score_comparison(c, comp, prompts, imported["labels"],
                                    bootstrap_seed=np.random.SeedSequence([c["evaluation"]["seed"], i, 7781]))
                    for i, comp in enumerate(c["evaluation"]["comparisons"])]
-    value = {"protocol": "hh_finite_pool_v3", "selection": run.selection(), "seed": c["study"]["seed"],
+    value = {"protocol": c["protocol"], "selection": run.selection(), "seed": c["study"]["seed"],
              "judge": packet["settings"], "comparisons": comparisons,
              "generation": {method: _generation_metrics(records) for method, records in sources.items()},
              "accounting": imported["accounting"], "billing": imported["billing"],
@@ -487,20 +501,22 @@ def run_local(packet_path, results, ledger, *, budget_usd=None, workers=8, execu
     if os.environ.get("SLURM_JOB_ID"):
         raise RuntimeError("V3 OpenAI Judge runs locally, never on cluster compute nodes")
     packet = _load_packet(packet_path)
-    if packet.get("v3", {}).get("protocol") != "hh_finite_pool_v3" or packet["role"] != "evaluation":
+    edition = _packet_edition(packet)
+    if packet["role"] != "evaluation":
         raise ValueError("Expected a V3 evaluation-only packet")
     if not execute:
         return {"packet_id": packet["packet_id"], "tasks": len(packet["tasks"]), "http_requests_sent": 0,
-                "requires": "--execute, explicit positive USD cap, isolated v3-*.sqlite ledger"}
+                "requires": f"--execute, explicit positive USD cap, isolated {edition}-*.sqlite ledger"}
     if type(budget_usd) not in (int, float) or not math.isfinite(budget_usd) or budget_usd <= 0:
         raise ValueError("V3 evaluation requires an explicit positive USD cap")
     if type(workers) is not int or not 1 <= workers <= 16:
         raise ValueError("V3 workers must be in 1..16")
     ledger = Path(ledger).resolve()
-    if not ledger.name.startswith("v3-") or ledger.suffix != ".sqlite":
-        raise ValueError("Use an isolated v3-*.sqlite ledger; V2 ledger reuse is forbidden")
-    marker = ledger.with_name(ledger.name + ".v3.json")
-    contract = {"protocol": "v3_judge_ledger_v1", "packet_id": packet["packet_id"],
+    if not ledger.name.startswith(edition + "-") or ledger.suffix != ".sqlite":
+        detail = "V2 ledger reuse is forbidden" if edition == "v3" else "V3/V2 ledger reuse is forbidden"
+        raise ValueError(f"Use an isolated {edition}-*.sqlite ledger; {detail}")
+    marker = ledger.with_name(ledger.name + "." + edition + ".json")
+    contract = {"protocol": edition + "_judge_ledger_v1", "packet_id": packet["packet_id"],
                 "config_sha256": packet["config_sha256"], "budget_usd": float(budget_usd)}
     with owner_lock(str(ledger) + ".lock"):
         if ledger.exists() and (not marker.exists() or read_json(marker) != contract):

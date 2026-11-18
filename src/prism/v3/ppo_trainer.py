@@ -74,8 +74,9 @@ def stream_generate(actor, prompts, *, pad, eos, max_new_tokens, temperature=1.)
     active = torch.ones(batch, dtype=torch.bool, device=prompts.device)
     cache = None
     for step in range(max_new_tokens):
+        kwargs = {"logits_to_keep": 1} if getattr(actor.config, "model_type", None) == "olmo3" else {}
         output = actor(input_ids=safe, attention_mask=mask, position_ids=position,
-                       past_key_values=cache, use_cache=True, return_dict=True)
+                       past_key_values=cache, use_cache=True, return_dict=True, **kwargs)
         logits = output.logits[:, -1].float() / temperature
         # Separate FP32 log-softmax is used on both cached and complete paths.
         probabilities = torch.softmax(logits, dim=-1)
@@ -250,6 +251,11 @@ class PPOEngine:
         self.critic.eval()
 
     def _actor_logp(self, query_response, response, context):
+        if self.settings.get("executor") == "shared_frozen_storage_v4":
+            from prism.v4.models import response_logps
+            return response_logps(self.actor, prepare_inputs(query_response, self.pad),
+                                  response.masked_fill(response.eq(self.pad), 0), context,
+                                  chunk_size=self.settings["logp_chunk_tokens"])
         output = self.actor(**prepare_inputs(query_response, self.pad))
         logits = output.logits[:, context - 1:-1].float() / self.settings["temperature"]
         return selected_logprobs(logits, response.masked_fill(response.eq(self.pad), 0))

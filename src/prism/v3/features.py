@@ -15,7 +15,9 @@ from .recovery import recover_stage, seal_and_publish, stage_lock
 
 def _sources():
     folder = Path(__file__).resolve().parent
-    return [Path(__file__), folder / "data.py", folder.parent / "hf.py", folder.parent / "numerics.py"]
+    paths = [Path(__file__), folder / "data.py", folder.parent / "hf.py", folder.parent / "numerics.py"]
+    paths.extend(p for p in (folder.parent / "v4" / "models.py",) if p.exists())
+    return paths
 
 
 def _backend_contract(scorer):
@@ -75,6 +77,10 @@ class HFPairScorer:
         self._score = lru_cache(maxsize=65536)(self._score_uncached)
 
     def _score_uncached(self, prompt, response):
+        if self.c.get("protocol") == "hh_finite_pool_v4":
+            from prism.v4.models import sequence_stats
+            return sequence_stats(self.model, list(prompt), list(response), self.tokenizer.eos_token_id,
+                                  chunk_size=self.c["features"]["logp_chunk_tokens"])
         from prism.hf import sequence_stats
         return sequence_stats(self.model, list(prompt), list(response), self.tokenizer.eos_token_id)
 

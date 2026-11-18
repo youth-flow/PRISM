@@ -22,12 +22,16 @@ def stage_resource(stage):
     return "gpu" if stage in GPU_STAGES else "cpu"
 
 
-def main(argv=None):
+def main(argv=None, *, config_loader=load_config, stage_guard=None, handlers=None, default_config=None):
+    # V4 reuses audited stage orchestration with its own schema and GPU adapters.
+    handlers = {} if handlers is None else handlers
+    stages = tuple(dict.fromkeys((*STAGES, *handlers)))
     parser = argparse.ArgumentParser(description="HH human-preference V3 stages; no implicit paid or compute jobs")
-    parser.add_argument("stage", choices=STAGES)
-    parser.add_argument("--config", default=str(Path(__file__).resolve().parents[3] / "configs/experiment.v3.yaml"))
+    parser.add_argument("stage", choices=stages)
+    parser.add_argument("--config", default=default_config or str(Path(__file__).resolve().parents[3] / "configs/experiment.v3.yaml"))
     parser.add_argument("--execute", action="store_true", help="Explicitly execute a stage; never sets a paid-call allowance")
-    parser.add_argument("--for-stage", choices=STAGES)
+    parser.add_argument("--for-stage", choices=stages)
+    parser.add_argument("--reference-run", help="Read-only comparison against an earlier run")
     parser.add_argument("--method", choices=["sft", "empirical", "prism"])
     parser.add_argument("--source-manifest")
     parser.add_argument("--shard-index", type=int, default=0)
@@ -42,7 +46,9 @@ def main(argv=None):
     parser.add_argument("--complete", action="store_true", help="Require every formal stage in the final audit")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    c = load_config(args.config)
+    c = config_loader(args.config)
+    if stage_guard is not None:
+        stage_guard(c, args)
     if args.stage == "validate":
         value = {"structural_validation": "passed", "counts": plan(c),
                  "formal_compute_started": False, "note": "Numerical/model/data acceptance is performed by explicit stages."}
@@ -54,11 +60,16 @@ def main(argv=None):
             {"phase": 3, "stages": ["freeze-study", "sample", "reward", "normalize-reward"], "blocked_until": "explicit user budget selection"},
             {"phase": 4, "stages": ["policy"], "units": 2, "acceptance": "critic prefit; engineering and development probes; true optimizer steps"},
             {"phase": 5, "stages": ["evaluate-generate", "merge-evaluation", "judge-export"]},
-            {"phase": 6, "stages": ["judge-import", "aggregate", "audit"], "local_paid_judge": "requires a separate explicit V3 ceiling"}]
+            {"phase": 6, "stages": ["judge-import", "aggregate", "audit"], "local_paid_judge": "requires a separate explicit experiment ceiling"}]
+        if c["protocol"] == "hh_finite_pool_v4":
+            value["phases"][0]["stages"] = ["runtime-check", "download-model", "model-smoke", "prepare-data",
+                                             "cohort-audit", "extract-features", "merge-features", "prepare-shared"]
+            value["phases"][1]["next"] = "user chooses N/lambda after the new 7B Design report"
+            value["prerequisite_diagnostic"] = ["full-pool-reward", "full-pool-reward-report"]
     elif args.stage == "resource":
         if not args.for_stage:
             parser.error("resource requires --for-stage")
-        print(stage_resource(args.for_stage))
+        print(handlers[args.for_stage][0] if args.for_stage in handlers else stage_resource(args.for_stage))
         return
     elif args.stage == "status":
         from .audit import status
@@ -66,7 +77,9 @@ def main(argv=None):
     else:
         if not args.execute:
             parser.error(f"{args.stage} requires --execute; plan/validate do not execute work")
-        if args.stage == "download-data":
+        if args.stage in handlers:
+            value = handlers[args.stage][1](c, args)
+        elif args.stage == "download-data":
             from .data import download_raw
             value = download_raw(c)
         elif args.stage == "prepare-data":

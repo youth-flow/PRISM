@@ -22,10 +22,17 @@ def _sources():
 
 
 def _inputs(c, run):
-    for stage in ("data", "features", "geometry"):
+    stages = ("data", "features", "cohort-audit") if c.get("protocol") == "hh_finite_pool_v4" else ("data", "features", "geometry")
+    for stage in stages:
         run.require(stage)
-    with np.load(run.file("geometry/geometry.npz"), allow_pickle=False) as file:
-        v, ids = file["v"], file["ids"].astype(str)
+    if "geometry" in stages:
+        with np.load(run.file("geometry/geometry.npz"), allow_pickle=False) as file:
+            v, ids = file["v"], file["ids"].astype(str)
+    else:
+        with np.load(run.file("features/pool.npz"), allow_pickle=False) as file:
+            phi = file["phi"].astype(np.float64)
+            v, ids = phi[:, 0] - phi[:, 1], file["ids"].astype(str)
+        del phi
     label_rows = rows(run.file("data/labels.jsonl"))
     labels = {r["id"]: r["label"] for r in label_rows}
     if (v.shape != (len(ids), c["data"]["feature_dimension"]) or len(set(ids)) != len(ids)
@@ -41,7 +48,7 @@ def _inputs(c, run):
             or len(set(dev_ids)) != len(dev_ids) or set(dev_ids) & set(ids) or not np.isfinite(phi).all()):
         raise ValueError("Full-pool Reward development data are misaligned or overlap training")
     dev_v, dev_y = phi[:, 0]-phi[:, 1], np.asarray([r["label"] for r in dev], dtype=np.float64)
-    dependencies = [run.receipt_path(s) for s in ("data", "features", "geometry")]
+    dependencies = [run.receipt_path(s) for s in stages]
     dependencies.extend((run.file("data/labels.jsonl"), run.file("data/reward_dev.jsonl")))
     return v, y, dev_v, dev_y, dev, dependencies
 
@@ -88,7 +95,8 @@ def fit_full_pool_candidate(c, penalty):
         w, fit = fit_bt(v, y, max_iter=options["max_iter"], gradient_tolerance=options["gradient_tolerance"],
                        max_weight_norm=options["max_weight_norm"], l2_regularization=penalty)
         independent = _verify(v, y, w, penalty, fit, options["gradient_tolerance"])
-        report = {"protocol": "v3_full_pool_frozen_reward_diagnostic_v1", "training_pairs": len(y),
+        edition = "v4" if c.get("protocol") == "hh_finite_pool_v4" else "v3"
+        report = {"protocol": edition + "_full_pool_frozen_reward_diagnostic_v1", "training_pairs": len(y),
                   "development_pairs": len(dev_y), "feature_dimension": v.shape[1], "l2": float(penalty),
                   "fit": fit, "independent_fit_check": independent,
                   "training": prediction_metrics(v, y, w), "development": prediction_metrics(dev_v, dev_y, w),
@@ -134,7 +142,8 @@ def summarize_full_pool(c):
             original = next(r for r in existing["candidates"] if r["l2_regularization"] == existing["selected_l2"])
             reference = {"budget": existing["budget"], "l2": existing["selected_l2"], "methods": original["methods"]}
             dependencies.append(run.receipt_path("reward"))
-        result = {"protocol": "v3_full_pool_frozen_reward_diagnostic_v1", "diagnostic_only": True,
+        edition = "v4" if c.get("protocol") == "hh_finite_pool_v4" else "v3"
+        result = {"protocol": edition + "_full_pool_frozen_reward_diagnostic_v1", "diagnostic_only": True,
                   "training_pairs": len(y), "development_pairs": len(dev_y), "candidates": reports,
                   "selected_l2": best["l2"], "selection_metric": "same_development_BT_NLL",
                   "full_pool_selected": {k: best[k] for k in ("training", "development", "development_subsets")},

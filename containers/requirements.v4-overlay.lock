@@ -1,0 +1,5 @@
+# Isolated Linux CPython 3.11 layer over the verified V3 SIF; do not modify it.
+transformers==4.57.1
+tokenizers==0.22.1
+huggingface-hub==0.36.0
+hf-xet==1.2.0

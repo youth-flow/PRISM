@@ -1,0 +1,182 @@
+schema_version: 4
+protocol: hh_finite_pool_v4
+output: ../runs/olmo3-7b-hh-v4
+execution:
+  allow_paid_api_calls: false
+  allow_training_judge: false
+model:
+  id: allenai/Olmo-3-7B-Instruct-SFT
+  revision: e1452fc572d51966ff4aaeb25118b891eb93e549
+runtime:
+  device: cuda
+  dtype: float32
+  numerics: fp32_consistent_v1
+  local_files_only: true
+  allow_tf32: false
+study:
+  methods:
+  - empirical
+  - prism
+  seed: 11
+  budget: null
+  selected_design_lambda: null
+  budget_authority: user_after_design_report
+data:
+  source_id: Anthropic/hh-rlhf
+  revision: 09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa
+  raw_dir: ../data/hh-rlhf-v4/raw
+  subsets:
+  - helpful-base
+  - helpful-online
+  - helpful-rejection-sampled
+  - harmless-base
+  expected_train_rows: 160800
+  expected_test_rows: 8552
+  policy_prompts: 32768
+  reward_dev_pairs: 2048
+  ppo_dev_prompts: 512
+  evaluation_prompts: 500
+  context_tokens: 4096
+  max_prompt_tokens: 2048
+  feature_dimension: 4096
+  split_seed: 11
+  duplicate_policy: canonical_pair_conflicts_excluded
+  disjoint_design_policy: false
+  require_disjoint_train_test: true
+  truncate_human_answers: false
+features:
+  dtype: float32
+  matrix_dtype: float64
+  shards: 32
+  eos_logp: included_in_canonical_response
+  label_blind: true
+  logp_chunk_tokens: 32
+design:
+  surrogate_ridge: 0.01
+  lambdas:
+  - 0.001
+  - 0.01
+  - 0.1
+  preferred_lambda: 0.01
+  solver: joint-lbfgs
+  max_iter: 500
+  relative_gap: 0.0001
+  block_size: 4096
+  probability_floor: 0.0
+  extra_constraints: none
+sampling:
+  protocol: weighted_without_replacement_gumbel_v1
+  replacement: false
+  empirical: uniform_valid_pair
+reward:
+  backbone_trainable: false
+  feature_dimension: 4096
+  bias: false
+  l2_candidates:
+  - 0.001
+  - 0.01
+  - 0.1
+  selection: shared_development_mean_bt_nll
+  max_iter: 2000
+  gradient_tolerance: 1.0e-06
+  max_weight_norm: 1000.0
+  calibration_responses: 4096
+  normalization: fixed_sft_mean_std
+ppo:
+  total_episodes: 65536
+  rollout_batch_size: 128
+  mini_batch_size: 64
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 64
+  num_mini_batches: 2
+  num_ppo_epochs: 4
+  learning_rate: 1.0e-05
+  critic_learning_rate: 3.0e-05
+  critic_head_learning_rate: 0.0001
+  lora_r: 16
+  lora_alpha: 32
+  lora_target_modules: all-linear
+  lora_dropout: 0.0
+  critic_lora_r: 16
+  critic_lora_alpha: 32
+  critic_warmup_episodes: 2048
+  critic_warmup_epochs: 4
+  critic_warmup_mini_batch_size: 64
+  warmup_ratio: 0.05
+  minimum_learning_rate_ratio: 0.1
+  scheduler: warmup_cosine_floor
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-05
+  weight_decay: 0.0
+  gamma: 1.0
+  lam: 0.95
+  kl_coef: 0.05
+  cliprange: 0.2
+  cliprange_value: 0.2
+  vf_coef: 0.1
+  max_grad_norm: 1.0
+  independent_gradient_clipping: true
+  response_length: 512
+  temperature: 1.0
+  top_p: 1.0
+  top_k: 0
+  whiten_rewards: false
+  whiten_advantages: true
+  local_rollout_forward_batch_size: 1
+  probability_check_rows: 4
+  max_logp_error: 0.001
+  max_zero_update_approxkl: 1.0e-07
+  engineering_checkpoint: 2048
+  durable_checkpoint_interval: 2048
+  checkpoints:
+  - 8192
+  - 16384
+  - 32768
+  - 65536
+  fixed_train_probe_prompts: 128
+  executor: shared_frozen_storage_v4
+  gradient_checkpointing: true
+  logp_chunk_tokens: 32
+evaluation:
+  backend: openai
+  model: gpt-6-luna
+  api: responses
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  reasoning_effort: medium
+  service_tier: default
+  max_output_tokens: 4096
+  max_attempts: 3
+  timeout_seconds: 900
+  budget_usd: null
+  max_new_tokens: 512
+  temperature: 1.0
+  seed: 11
+  answer_orders:
+  - AB
+  - BA
+  tie_score: 0.5
+  bootstrap_samples: 2000
+  comparisons:
+  - name: prism_vs_empirical
+    left: prism
+    right: empirical
+    primary: true
+  - name: prism_vs_sft
+    left: prism
+    right: sft
+    primary: false
+  - name: empirical_vs_sft
+    left: empirical
+    right: sft
+    primary: false
+runtime_packages:
+  transformers: 4.57.1
+  tokenizers: 0.22.1
+  huggingface-hub: 0.36.0
+  peft: 0.15.2
+  accelerate: 1.7.0
+admission:
+  policy: false
+  paid_judge: false
