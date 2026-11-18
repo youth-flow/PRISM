@@ -76,6 +76,7 @@ def settings():
             "num_mini_batches": 2, "num_ppo_epochs": 1,
             "learning_rate": .002, "critic_learning_rate": .003,
             "critic_head_learning_rate": .004,
+            "warmup_ratio": .05, "minimum_learning_rate_ratio": .1,
             "adam_beta1": .9, "adam_beta2": .999, "adam_epsilon": 1e-5,
             "weight_decay": 0., "gamma": 1., "lam": .95, "kl_coef": .05,
             "cliprange": .2, "cliprange_value": .2, "vf_coef": .1,

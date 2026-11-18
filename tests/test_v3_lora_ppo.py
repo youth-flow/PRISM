@@ -1,4 +1,5 @@
 """Real tiny OLMo2/PEFT coverage for the isolated full-pool LoRA PPO path."""
+from copy import deepcopy
 import numpy as np
 import pytest
 
@@ -59,8 +60,9 @@ def settings():
 def models():
     seed_everything(11)
     config = configuration()
+    sft = Olmo2Model(config).float().eval()
     recipe = {**REWARD_RECIPE, "rank": 2, "alpha": 4}
-    reward_model = make_reward_model(Olmo2Model(config).float().eval(), recipe=recipe)
+    reward_model = make_reward_model(deepcopy(sft), recipe=recipe)
     with torch.no_grad():
         reward_model.head.weight.copy_(torch.linspace(-.2, .2, 16)[None])
         # A nonzero adapter is essential: copying only the scalar head must not
@@ -73,7 +75,7 @@ def models():
     mean, std = .17, 1.3
     reward = FrozenLoRANormalizedReward(reward_model, mean, std, eos=2, pad=37,
                                         context_tokens=64, batch_size=2)
-    critic = make_lora_critic(Olmo2Model(config).float().eval(), reward_model, mean, std, settings())
+    critic = make_lora_critic(deepcopy(sft), reward_model, mean, std, settings())
     actor = make_actor(Olmo2ForCausalLM(config).float().eval(), settings())
     return actor, critic, reward, reward_model
 

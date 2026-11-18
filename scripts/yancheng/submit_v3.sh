@@ -50,6 +50,8 @@ fi
 requested_cpus="${PRISM_CPUS:-$cpus}"
 requested_memory="${PRISM_MEMORY:-$memory}"
 if [[ "$stage" == lora-ppo-smoke || "$stage" == lora-ppo-policy ]]; then
+  [[ "$gpu" == 4 || "$gpu" == 8 ]] \
+    || prism_die "Distributed LoRA PPO uses exactly 4 or 8 homogeneous GPUs"
   [[ "$requested_cpus" =~ ^[1-9][0-9]*$ && $((requested_cpus%gpu)) -eq 0
      && "$requested_cpus" -ge $((gpu*8)) ]] \
     || prism_die "Distributed LoRA PPO requires at least 8 CPU cores per GPU, evenly divided"

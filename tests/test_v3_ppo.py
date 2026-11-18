@@ -205,7 +205,7 @@ def test_checkpoint_resume_is_bitwise_equal_to_uninterrupted_training(tmp_path):
         assert torch.equal(tensor, trainable(resumed.actor)[name])
     for name, tensor in trainable(continuous.critic).items():
         assert torch.equal(tensor, trainable(resumed.critic)[name])
-    with pytest.raises(ValueError, match="different"):
+    with pytest.raises(ValueError, match="identity"):
         engine(tmp_path / "checkpoint", contract="different").resume()
 
 

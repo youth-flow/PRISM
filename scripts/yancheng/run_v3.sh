@@ -40,11 +40,14 @@ opts=(--cleanenv --no-home --bind "$PRISM_V3_SOURCE_DIR:/opt/prism:ro"
   --env PYTHONPATH=/opt/prism/src --env HF_HOME=/hf --env TMPDIR="$jobroot/tmp"
   --env "OMP_NUM_THREADS=$threads" --env "OPENBLAS_NUM_THREADS=$threads"
   --env "MKL_NUM_THREADS=$threads" --env "SLURM_CPUS_PER_TASK=$threads"
-  --env "PRISM_DISTRIBUTED_GPUS=$distributed_gpus" --env "PRISM_EXPECTED_GPU_COUNT=$distributed_gpus"
   --env "SLURM_JOB_ID=$SLURM_JOB_ID" --env TOKENIZERS_PARALLELISM=false)
 if [[ "${PRISM_STAGE_RESOURCE:?}" == gpu ]]; then
   prism_check_gpu_partition
-  opts+=(--nv --env "PRISM_GPU_MODEL=${PRISM_GPU_MODEL:-A100}")
+  opts+=(--nv --env "PRISM_GPU_MODEL=${PRISM_GPU_MODEL:-A100}"
+         --env "PRISM_EXPECTED_GPU_COUNT=$distributed_gpus")
+  if [[ "$distributed_gpus" -gt 1 ]]; then
+    opts+=(--env "PRISM_DISTRIBUTED_GPUS=$distributed_gpus")
+  fi
   for name in CUDA_VISIBLE_DEVICES NVIDIA_VISIBLE_DEVICES GPU_DEVICE_ORDINAL; do
     if [[ -v "$name" ]]; then opts+=(--env "$name=${!name}"); fi
   done
