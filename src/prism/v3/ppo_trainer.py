@@ -245,7 +245,14 @@ class PPOEngine:
         self.shuffle_rng = np.random.default_rng(seed + 104729)
         self.completed_episodes, self.completed_rounds, self.history = 0, 0, []
         self.probability_checks, self.step_checks = [], []
-        self._frozen = [(p, p._version) for m in (actor, critic) for p in m.parameters() if not p.requires_grad]
+        frozen = [p for m in (actor, critic) for p in m.parameters() if not p.requires_grad]
+        reward_parameters = getattr(reward, "frozen_parameters", None)
+        if reward_parameters is not None:
+            reward_frozen = list(reward_parameters())
+            if not reward_frozen or any(p.requires_grad for p in reward_frozen):
+                raise ValueError("Reward frozen-parameter contract is empty or trainable")
+            frozen.extend(reward_frozen)
+        self._frozen = [(p, p._version) for p in frozen]
         self.actor.eval()
         self.critic.eval()
 
@@ -352,7 +359,7 @@ class PPOEngine:
         if any(v["step_min"] != expected or v["step_max"] != expected for v in actual.values()):
             raise RuntimeError("Actual actor/critic AdamW step counters disagree with the rollout schedule")
         if any(parameter._version != version for parameter, version in self._frozen):
-            raise RuntimeError("A frozen actor/reference/critic parameter was mutated")
+            raise RuntimeError("A frozen actor/reference/critic/Reward parameter was mutated")
         self.step_checks.append({"round": self.completed_rounds + 1, "expected": expected, "actual": actual})
         return {name: float(np.mean([row[name] for row in statistics])) for name in statistics[0]}
 
@@ -413,7 +420,7 @@ class PPOEngine:
             torch.cuda.set_rng_state_all([v.cpu() for v in state["cuda"]])
         self.shuffle_rng.bit_generator.state = state["shuffle"]
 
-    def save_checkpoint(self, *, diagnostics_due=False):
+    def save_checkpoint(self, *, diagnostics_due=False, metadata=None):
         if self.checkpoint_dir is None:
             return None
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -424,6 +431,7 @@ class PPOEngine:
         value = {"protocol": PROTOCOL, "contract_hash": self.contract_hash,
                  "episode": self.completed_episodes, "round": self.completed_rounds,
                  "diagnostics_due": bool(diagnostics_due),
+                 "metadata": metadata or {},
                  "actor": _trainable_state(self.actor), "critic": _trainable_state(self.critic),
                  "optimizer": self.optimizer.state_dict(), "sampler": self.sampler.state_dict(), "rng": self.capture_rng(),
                  "history": self.history, "probability_checks": self.probability_checks, "step_checks": self.step_checks}
@@ -443,7 +451,67 @@ class PPOEngine:
     def resume(self, *, on_checkpoint=None):
         if self.checkpoint_dir is None:
             raise ValueError("No checkpoint directory")
-        latest = read_json(self.checkpoint_dir / "latest.json")
+        latest_path = self.checkpoint_dir / "latest.json"
+        latest = read_json(latest_path) if latest_path.is_file() else None
+        current = -1
+        if latest is not None:
+            current_path = (self.checkpoint_dir / latest["path"]).resolve()
+            if (current_path.parent != self.checkpoint_dir.resolve()
+                    or digest(current_path) != latest["sha256"]):
+                raise ValueError("Checkpoint path/hash mismatch")
+            try:
+                named_episode = int(current_path.stem.split("-")[-1])
+            except ValueError as exc:
+                raise ValueError("Invalid latest PPO checkpoint filename") from exc
+            current_state = torch.load(current_path, map_location="cpu", weights_only=True)
+            if (current_path.name != f"episode-{named_episode:08d}.pt"
+                    or latest.get("episode") != named_episode
+                    or latest.get("contract_hash") != self.contract_hash
+                    or current_state.get("protocol") != PROTOCOL
+                    or current_state.get("contract_hash") != self.contract_hash
+                    or current_state.get("episode") != named_episode
+                    or named_episode != current_state.get("round", -1) * self.batch):
+                raise ValueError("Latest PPO metadata/checkpoint identity mismatch")
+            current = named_episode
+            del current_state
+        # A checkpoint file is fsynced and atomically renamed before latest.json.
+        # Promote a complete newer orphan after a worker loss in that narrow
+        # window; never overwrite or delete a differing checkpoint.
+        newer = []
+        for candidate in self.checkpoint_dir.glob("episode-*.pt"):
+            try:
+                episode = int(candidate.stem.split("-")[-1])
+            except ValueError as exc:
+                raise ValueError("Invalid PPO checkpoint filename") from exc
+            if episode > current:
+                newer.append((episode, candidate))
+        for episode, candidate in sorted(newer):
+            state = torch.load(candidate, map_location="cpu", weights_only=True)
+            expected = state.get("round", -1) * self.settings["num_ppo_epochs"] * self.settings["num_mini_batches"]
+            saved_optimizer = state.get("optimizer", {})
+            groups = saved_optimizer.get("param_groups", [])
+            parameter_ids = [parameter_id for group in groups for parameter_id in group.get("params", [])]
+            counts = [int(saved_optimizer.get("state", {}).get(parameter_id, {}).get("step", 0))
+                      for parameter_id in parameter_ids]
+            # The critic-prefit bootstrap is saved at episode/round zero before
+            # PPO AdamW has created per-parameter state.  It is the sole valid
+            # checkpoint with empty optimizer state; every trained checkpoint
+            # must cover every optimizer parameter at the exact real step.
+            optimizer_valid = (episode == 0 and state.get("round") == 0
+                               and bool(parameter_ids) and not saved_optimizer.get("state")) or (
+                                   episode > 0 and len(counts) == len(parameter_ids)
+                                   and bool(counts) and all(count == expected for count in counts))
+            if (state.get("protocol") != PROTOCOL or state.get("contract_hash") != self.contract_hash
+                    or state.get("episode") != episode or episode != state.get("round", -1) * self.batch
+                    or not optimizer_valid):
+                raise ValueError("Unindexed PPO checkpoint is incomplete or belongs to another contract")
+            latest = {"path": candidate.name, "sha256": digest(candidate),
+                      "contract_hash": self.contract_hash, "episode": episode,
+                      "diagnostics_due": bool(state.get("diagnostics_due", True))}
+            write_json(latest_path, latest, overwrite=True)
+            current = episode
+        if latest is None:
+            raise ValueError("No committed or recoverable PPO checkpoint")
         path = (self.checkpoint_dir / latest["path"]).resolve()
         if path.parent != self.checkpoint_dir.resolve() or digest(path) != latest["sha256"]:
             raise ValueError("Checkpoint path/hash mismatch")

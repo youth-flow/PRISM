@@ -10,6 +10,9 @@ case "$stage" in
   extract-features|prepare-shared|evaluate-generate|lora-reward-score) gpu=1; cpus=2; memory=16G; duration=12:00:00 ;;
   lora-reward-train) gpu=1; cpus=8; memory=48G; duration=48:00:00 ;;
   lora-reward-smoke) gpu=1; cpus=4; memory=24G; duration=01:00:00 ;;
+  lora-ppo-normalize) gpu=1; cpus=4; memory=24G; duration=04:00:00 ;;
+  lora-ppo-smoke) gpu=1; cpus=8; memory=64G; duration=01:00:00 ;;
+  lora-ppo-policy) gpu=1; cpus=8; memory=64G; duration=24:00:00 ;;
   policy) gpu=1; cpus=8; memory=64G; duration=24:00:00 ;;
   model-smoke|shared-smoke) gpu=1; cpus=8; memory=64G; duration=01:00:00 ;;
   download-data) cpus=4; memory=6G; duration=04:00:00 ;;
@@ -17,7 +20,7 @@ case "$stage" in
   merge-features) cpus=8; memory=12G; duration=04:00:00 ;;
   reward|audit-training|full-pool-reward|full-pool-reward-report|lora-reward-data|lora-reward-report) cpus=8; memory=12G; duration=04:00:00 ;;
   cpu-smoke) cpus=4; memory=6G; duration=01:00:00 ;;
-  validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate) ;;
+  validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate|lora-ppo-admit) ;;
   *) prism_die "Unsupported V3 compute stage; paid Judges run locally: $stage" ;;
 esac
 prism_check_paths
@@ -36,6 +39,13 @@ if [[ "$stage" != cpu-smoke ]]; then
   [[ "$PRISM_CONFIG_PATH" == /* && -f "$PRISM_CONFIG_PATH" ]] || prism_die "Supply --config /absolute/path/to/v3.yaml"
   prism_path_under "$PRISM_STORAGE" "$PRISM_CONFIG_PATH"
   PRISM_CONFIG_SHA256="$(sha256sum "$PRISM_CONFIG_PATH" | cut -d ' ' -f 1)"
+fi
+if [[ "$stage" == lora-ppo-policy ]]; then
+  stop_after=""
+  for ((i=0; i<${#cli[@]}; i++)); do
+    if [[ "${cli[$i]}" == --stop-after-episodes && $((i+1)) -lt ${#cli[@]} ]]; then stop_after="${cli[$((i+1))]}"; fi
+  done
+  [[ "$stop_after" =~ ^[1-9][0-9]*$ ]] || prism_die "LoRA PPO policy requires an explicit positive --stop-after-episodes checkpoint"
 fi
 args=(--parsable --export=ALL --account="$PRISM_ACCOUNT" --nodes=1 --ntasks=1
   --cpus-per-task="${PRISM_CPUS:-$cpus}" --mem="${PRISM_MEMORY:-$memory}" --time="${PRISM_TIME:-$duration}"

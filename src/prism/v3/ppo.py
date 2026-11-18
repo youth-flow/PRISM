@@ -134,6 +134,10 @@ class FrozenNormalizedReward:
                 result.append((phi @ self.weights - self.mean) / self.std)
         return torch.cat(result)
 
+    def frozen_parameters(self):
+        """Expose immutable tensors so PPO can detect accidental Reward updates."""
+        return self.backbone.parameters()
+
 
 def _save_rows(path, records):
     path = Path(path)

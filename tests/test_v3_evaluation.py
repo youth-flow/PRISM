@@ -302,6 +302,16 @@ def test_v3_submit_resources_snapshot_paths_and_no_side_effects(platform):
     assert "/work/releases/" in gpu.stdout and "run_v3.sh" in gpu.stdout
     policy = run("--dry-run", "policy", "--config", _shell_path(config), "--method", "prism")
     assert policy.returncode == 0 and "--cpus-per-task=8" in policy.stdout and "--mem=64G" in policy.stdout
+    normalize = run("--dry-run", "lora-ppo-normalize", "--config", _shell_path(config))
+    assert normalize.returncode == 0 and "--cpus-per-task=4" in normalize.stdout and "--mem=24G" in normalize.stdout
+    smoke = run("--dry-run", "lora-ppo-smoke", "--config", _shell_path(config))
+    assert smoke.returncode == 0 and "--cpus-per-task=8" in smoke.stdout and "--mem=64G" in smoke.stdout
+    lora_policy = run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config),
+                      "--stop-after-episodes", "2048")
+    assert lora_policy.returncode == 0 and "--cpus-per-task=8" in lora_policy.stdout and "--mem=64G" in lora_policy.stdout
+    lora_admit = run("--dry-run", "lora-ppo-admit", "--config", _shell_path(config),
+                     "--user-lora-ppo-confirmed")
+    assert lora_admit.returncode == 0 and "--cpus-per-task=2" in lora_admit.stdout and "--mem=3G" in lora_admit.stdout
     assert not (storage/"work").exists() and not (storage/"logs").exists()
     # A user's untracked research file is never part of git archive.
     (repo/"unrelated.pdf").write_bytes(b"user document")
@@ -317,6 +327,9 @@ def test_v3_submit_blocks_api_arrays_excess_memory_and_actual_submit(platform):
     assert matched.returncode == 0, matched.stderr
     # The GPU partition's host memory is not subjected to the CPU queue limit.
     assert run("--dry-run", "policy", "--config", _shell_path(config)).returncode == 0
+    assert run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config)).returncode != 0
+    assert run("--dry-run", "lora-ppo-policy", "--config", _shell_path(config),
+               "--stop-after-episodes", "2048", overrides={"PRISM_ARRAY": "0-1%1"}).returncode != 0
     array = run("--dry-run", "extract-features", "--config", _shell_path(config), "--shards", "32",
                 overrides={"PRISM_ARRAY": "0-31%8"})
     assert array.returncode == 0 and "--array=0-31%8" in array.stdout

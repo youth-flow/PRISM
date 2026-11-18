@@ -159,6 +159,54 @@ def test_checkpoint_resume_is_bitwise_equal_to_uninterrupted_training(tmp_path):
         engine(tmp_path / "checkpoint", contract="different").resume()
 
 
+def test_resume_promotes_complete_checkpoint_orphaned_before_latest_update(tmp_path):
+    from prism.v3.artifacts import read_json, write_json
+
+    continuous = engine()
+    continuous.run()
+    folder = tmp_path / "orphan"
+    interrupted = engine(folder)
+    interrupted.run(stop_after_episodes=4)
+    latest_path = folder / "latest.json"
+    old_latest = read_json(latest_path)
+    interrupted.run(stop_after_episodes=8)
+    assert (folder / "episode-00000008.pt").is_file()
+    # Recreate a worker loss after the checkpoint rename but before latest.json.
+    write_json(latest_path, old_latest, overwrite=True)
+
+    resumed = engine(folder)
+    resumed.resume()
+
+    assert resumed.completed_episodes == 8
+    assert read_json(latest_path)["episode"] == 8
+    resumed.run()
+    assert resumed.history == continuous.history
+    for name, tensor in trainable(continuous.actor).items():
+        assert torch.equal(tensor, trainable(resumed.actor)[name])
+    for name, tensor in trainable(continuous.critic).items():
+        assert torch.equal(tensor, trainable(resumed.critic)[name])
+
+
+def test_resume_promotes_episode_zero_bootstrap_with_empty_adam_state(tmp_path):
+    from prism.v3.artifacts import read_json
+
+    folder = tmp_path / "bootstrap-orphan"
+    bootstrap = engine(folder)
+    checkpoint = bootstrap.save_checkpoint()
+    assert checkpoint.name == "episode-00000000.pt"
+    state = torch.load(checkpoint, weights_only=True)
+    assert state["episode"] == 0 and state["round"] == 0
+    assert state["optimizer"]["state"] == {}
+    (folder / "latest.json").unlink()
+
+    resumed = engine(folder)
+    resumed.resume()
+
+    assert resumed.completed_episodes == 0
+    assert read_json(folder / "latest.json")["episode"] == 0
+    assert resumed.history == []
+
+
 def test_microbatch_accumulation_preserves_whole_minibatch_objective():
     first = engine(micro=1)
     seed_everything(111)

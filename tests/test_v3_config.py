@@ -42,13 +42,30 @@ def test_invalid_protocol_is_rejected(tmp_path, section, key, value):
 
 def test_plan_validate_and_resource_do_not_create_run(tmp_path, capsys):
     c = configuration(tmp_path)
-    for command in (["plan"], ["validate"], ["resource", "--for-stage", "policy"], ["status"]):
+    for command in (["plan"], ["validate"], ["resource", "--for-stage", "policy"],
+                    ["resource", "--for-stage", "lora-ppo-normalize"],
+                    ["resource", "--for-stage", "lora-ppo-smoke"],
+                    ["resource", "--for-stage", "lora-ppo-policy"],
+                    ["resource", "--for-stage", "lora-ppo-admit"], ["status"]):
         main(command + ["--config", c["_config_path"]])
         assert not Path(c["output"]).exists()
         capsys.readouterr()
     with pytest.raises(SystemExit):
         main(["sample", "--config", c["_config_path"]])
     assert not Path(c["output"]).exists()
+
+
+def test_lora_ppo_policy_requires_explicit_stop_checkpoint(tmp_path):
+    c = configuration(tmp_path)
+    with pytest.raises(SystemExit):
+        main(["lora-ppo-policy", "--execute", "--config", c["_config_path"]])
+    assert not Path(c["output"]).exists()
+
+
+def test_lora_ppo_admission_requires_explicit_post_pilot_authority(tmp_path):
+    c = configuration(tmp_path)
+    with pytest.raises(ValueError, match="explicit user confirmation"):
+        main(["lora-ppo-admit", "--execute", "--config", c["_config_path"]])
 
 
 def test_receipt_checks_transitive_dependency_and_path_escape(tmp_path):

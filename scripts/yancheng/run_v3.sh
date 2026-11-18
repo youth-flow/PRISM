@@ -64,6 +64,13 @@ if [[ "$PRISM_STAGE_RESOURCE" == gpu ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
 fi
 cli=("$@")
+if [[ "$stage" == lora-ppo-policy ]]; then
+  stop_after=""
+  for ((i=0; i<${#cli[@]}; i++)); do
+    if [[ "${cli[$i]}" == --stop-after-episodes && $((i+1)) -lt ${#cli[@]} ]]; then stop_after="${cli[$((i+1))]}"; fi
+  done
+  [[ "$stop_after" =~ ^[1-9][0-9]*$ ]] || prism_die "LoRA PPO policy requires an explicit positive --stop-after-episodes checkpoint"
+fi
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score ]] || prism_die "Unexpected V3 array stage"
   cli+=(--shard-index "$SLURM_ARRAY_TASK_ID")

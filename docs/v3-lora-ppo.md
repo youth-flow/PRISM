@@ -1,0 +1,46 @@
+# V3 全池 LoRA Reward PPO 因果诊断
+
+本路径只回答一个问题：在 V3 的 OLMo-2-1B-SFT 上，已经独立验收的强 LoRA Reward 能否让 PPO 在固定训练／开发探针上可靠优于 SFT 参考。它不是原 Empirical／PRISM 两方法比较，不替换原14k Reward、Design、抽样、归一化或策略产物。
+
+## 冻结输入
+
+- Reward：`diagnostics/full-pool-lora-reward-fresh-head/checkpoints/step-002304.pt`。
+- 该 checkpoint 由预定开发 BT NLL 规则从完整全池学习日程选择：已见147,360对、训练准确率71.0987%、开发准确率69.6289%、开发 NLL .56658961。
+- Reward base、LoRA adapter和无bias scalar head在PPO期间全部冻结；运行契约绑定checkpoint、训练／汇总receipt及SHA256。
+- Actor仍从原SFT＋零增量LoRA开始，绝不复制Reward adapter。
+
+## PPO配方
+
+保持原V3配方，隔离Reward质量这一变量：FP32且禁TF32；actor LoRA r16/alpha32/all-linear/dropout0；65536总episodes；rollout128、minibatch64×2、4 PPO epochs；actor LR 1e-5；critic adapter/head LR 3e-5/1e-4；5% warmup、cosine降至10%；KL .05；policy/value clip .2；gamma1、GAE lambda .95；vf coefficient .1；独立norm1梯度裁剪；不白化Reward、白化advantage；T1、top-p1、top-k0、回答cap512。
+
+总horizon保持65536，使用绝对`--stop-after-episodes`分段，不能把配置临时缩成8192，否则会改变学习率日程。允许节点为2048、8192、16384、32768、65536。
+
+## Reward定标与Critic
+
+`lora-ppo-normalize`用同一冻结LoRA Reward重新评分已有4096条固定SFT回答，以FP64、`ddof=0`计算均值和标准差；旧线性Reward的定标禁止复用。同时保存128条固定训练probe和512条开发probe的SFT基线分数及身份。
+
+Critic是独立SFT feature backbone＋独立LoRA＋带bias value head。初始时严格复制Reward adapter的数值，但不共享参数对象或存储；价值头初始化为`reward_head/std`，bias为`-mean/std`。因此初始EOS value精确对应归一化Reward。随后用2048条SFT轨迹、4 epochs、64 minibatch完成128个真实Critic预热更新，held-out explained variance必须大于0且MSE优于常数基线。PPO中Critic继续学习“终点Reward＋逐token KL惩罚”的未来回报；Reward保持冻结。
+
+## 分阶段闸门
+
+1. `lora-ppo-smoke`：真实单卡一次最坏形状更新，选择全池最长的4个policy prompt，生成chunk=4、强制每条512 token，并以micro=2完成actor／critic反向；要求两者真更新、Reward base/adapter/head版本不变、Critic/Reward初始EOS误差小于2e-5、显存峰值和checkpoint可绑定恢复。这不是正式episodes。
+2. `lora-ppo-policy --stop-after-episodes 2048`：强制首停。Critic预热、actor/critic各128个PPO optimizer步、固定train/dev probe、有限性和Reward运行时不可变检查全部通过，才发布工程验收。
+3. `lora-ppo-policy --resume --stop-after-episodes 8192`：强制第二停。训练probe平均Reward增益必须为正；512开发prompt的Reward增益和含KL RLHF目标的95%下界必须为正；Critic必须继续优于常数MC基线。另保存KL、长度差、EOS、重复率及Reward增益与长度差相关性。
+4. 8192自动性能闸门通过仍不自动继续。检查probe后，只有显式执行`lora-ppo-admit --user-lora-ppo-confirmed`才允许后续16k／32k／65k。
+5. 自身Reward增益只证明PPO会优化该代理。若要声称“RLHF有利于SFT”，还必须在未用于训练／选参的500题上做PPO对SFT的独立盲评；本路径不自动调用付费API。
+
+checkpoint先于probe提交。若worker在checkpoint后退出，以相同stop点和`--resume`恢复会先重放／核对该checkpoint的probe和闸门；包括8192回调中断及65536最终发布中断，均不允许跳过或重做策略更新。
+
+## 入口
+
+```bash
+# 所有命令还需 --config "$cfg" --execute；以下先做dry-run。
+bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-normalize --config "$cfg" --execute
+bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-smoke --config "$cfg" --execute
+bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-policy --config "$cfg" --stop-after-episodes 2048 --execute
+bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-policy --config "$cfg" --resume --stop-after-episodes 8192 --execute
+# 只在用户审阅8192结果后：
+bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-admit --config "$cfg" --user-lora-ppo-confirmed --execute
+```
+
+normalize为1GPU/4CPU/24G，smoke和policy为1GPU/8CPU/64G；policy默认24小时只是作业时限，不代表完整horizon必然在24小时内结束。配置文件保持原字节，新增路径复用旧run的hash绑定资产并写入独立`diagnostics/full-pool-lora-ppo`、`policy/full-pool-lora`和`lora-ppo-*` receipts。

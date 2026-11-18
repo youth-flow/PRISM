@@ -1,5 +1,8 @@
 # V3 执行手册
 
+全池 LoRA Reward 驱动的独立 PPO 因果诊断使用隔离入口和强制2048／8192闸门，详见
+[v3-lora-ppo.md](v3-lora-ppo.md)。它不替换本手册中的正式 Empirical／PRISM 两方法流程。
+
 V3 是独立的 `hh_finite_pool_v3` 协议，配置为 `configs/experiment.v3.yaml`，输出默认 `runs/olmo1b-hh-v3`。本手册是执行入口说明；工程测试通过不代表完整 HH 数据、真实 GPU 显存或正式学习效果已经验收。
 
 2026-11-17用户已授权直接开始V3全池准备与Design；三λ分布求出后必须暂停并汇报，由用户决定唯一N或是否更换求解算法。后半段入口已准备，不因代码存在就自动放行。
