@@ -94,6 +94,9 @@ def trainable(model):
 
 
 def make_engine(path=None):
+    # Each simulated worker must start every independent subject from the same
+    # model state even though the prior subject used rank-specific rollout RNG.
+    torch.manual_seed(303)
     prompts = [[1, 3+(index % 20), 4+(index % 15)] for index in range(16)]
     return DistributedPPOEngine(Actor(), Critic(), Reward(), prompts, pad=PAD, eos=EOS,
                                 settings=settings(), seed=11,

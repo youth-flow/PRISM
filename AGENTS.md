@@ -1,5 +1,7 @@
 # PRISM 工作约定
 
+- **多卡PPO第二轮生产测试修复（2026-11-18 18:48）**：49036b6的生产SIF全库1991423为423 passed/1 failed，2:33、仅4 CPU、0GPU；原四类失败均已通过。唯一剩余失败为新增纯测试fixture连续训练后按rank改变了RNG，却在构建下一独立subject前未重置Critic随机head，checkpoint正确拒绝了rank间初值分歧；正式模型路径本来就在每次构建前固定seed并加载相同SFT权重。fixture已在每个subject前显式固定模型种子，仍须新commit第三次跑生产全库；不得放宽生产参数一致性检查。
+
 - **多卡PPO首轮生产测试修复（2026-11-18 18:37）**：不可变源4899eed的生产SIF全库1991394为420 passed/4 failed，2:54、仅4 CPU、0GPU。失败均在GPU放行前暴露：新增Gloo fixture漏学习率日程字段；CPU测试容器继承`PRISM_DISTRIBUTED_GPUS=1`导致资源dry-run错配；两个此前本机旧Transformers跳过的真实OLMo2测试分别使用了非同源随机base fixture及过窄错误文案断言。已分别补齐fixture、只在实际GPU阶段转发多卡环境且lora阶段强制4/8卡、改为同一SFT base的独立深拷贝、校正断言；本机恢复专项12 passed/3 skipped、全库374 passed/19 skipped。不得把1991394记为生产通过，须新不可变commit重跑生产全库后才能提交定标/GPU smoke/PPO。
 
 - **V3 LoRA Reward PPO正式启动（2026-11-18，最新用户指令优先）**：用户已明确授权在正确前提下充分利用现有计算资源跑完全池LoRA Reward的PPO，覆盖此前“PPO仍false/暂停”的旧状态，但不授权付费API。`Lora`分支采用单节点同型号4或8卡同步数据并行：全局rollout128/minibatch64/4 epochs和学习率日程不变，各rank只持有不重叠切片，advantage矩/token分母/指标/梯度全局归并，checkpoint绑定world size、各rank RNG与参数hash；不允许异构同步、独立分段平均或改变研究配方换速度。2026-11-18 18:30实查4090节点整机8卡空闲，故正式smoke/PPO优先8×4090（资源变化时才退至4卡），每卡8CPU/64G，FP32/TF32关闭；先生产SIF全库，再定标、8卡512-token实卡smoke、2048/8192强制关卡，8192后仍按证据审阅及显式admit继续16k/32k/65k。重要节点自动add/commit并普通push `origin/Lora`，运行产物不提交。
