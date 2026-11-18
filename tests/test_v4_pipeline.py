@@ -52,6 +52,7 @@ def test_v4_full_frozen_head_does_not_require_geometry_or_design(tmp_path):
         assert result["independent_fit_check"]["passed"]
     summary = summarize_full_pool(c)
     assert summary["independent_audit_passed"] and not summary["PPO_started"]
+    assert summary["formal_reward_reference"] == {} and "N14000_reference" not in summary
     assert not run.receipt_path("sampling").exists()
 
 

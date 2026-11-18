@@ -103,7 +103,8 @@ def fit_full_pool_candidate(c, penalty):
                   "development_subsets": _subsets(dev_v, dev_y, dev, w),
                   "training_label_one_fraction": float(y.mean()), "development_label_one_fraction": float(dev_y.mean()),
                   "backbone_trainable": False, "feature_map": "unchanged_frozen_SFT_FP32_EOS",
-                  "mean_loss_regularization": True, "formal_N14000_artifacts_modified": False,
+                  "mean_loss_regularization": True,
+                  ("formal_reward_artifacts_modified" if edition == "v4" else "formal_N14000_artifacts_modified"): False,
                   "final_test_used": False, "api_calls": 0, "elapsed_seconds": time.monotonic()-started}
         save_npz(weight_path, w=w)
         write_json(marker, report)
@@ -147,7 +148,8 @@ def summarize_full_pool(c):
                   "training_pairs": len(y), "development_pairs": len(dev_y), "candidates": reports,
                   "selected_l2": best["l2"], "selection_metric": "same_development_BT_NLL",
                   "full_pool_selected": {k: best[k] for k in ("training", "development", "development_subsets")},
-                  "N14000_reference": reference, "backbone_updated": False, "PPO_started": False,
+                  ("formal_reward_reference" if edition == "v4" else "N14000_reference"): reference,
+                  "backbone_updated": False, "PPO_started": False,
                   "formal_reward_replaced": False, "final_test_used": False, "api_calls": 0,
                   "independent_audit_passed": True}
         target = run.file(f"{PREFIX}/summary.json")

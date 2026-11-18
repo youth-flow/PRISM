@@ -42,6 +42,7 @@ actor、critic和Reward有独立模块树，只共享不可训练的基座Parame
 保留原Singularity SIF，在online1新目录安装[固定wheel层](../containers/requirements.v4-overlay.lock)，不修改旧SIF。新运行层用`runtime.sha256`逐文件封存；提交与计算节点核对其seal以及原SIF SHA。只在Slurm计算节点安装/计算。
 
 1. 本机下载Linux CPython3.11 wheels，上传到online1独立V4输入目录；生成逐wheel SHA及`wheels.sha256`，核对上传字节。
+   清单必须使用LF换行；Windows用`Path.write_bytes(...encode("utf-8"))`写清单，避免把CR当成Linux文件名的一部分。失败输入应保留原SHA，不覆盖后冒称首轮通过。
 
    ```powershell
    python -m pip download --no-deps --only-binary=:all: --platform manylinux2014_x86_64 --python-version 311 --implementation cp --abi cp311 -r containers/requirements.v4-overlay.lock -d local/v4-execution/linux-wheels
@@ -83,3 +84,15 @@ PRISM_ARRAY=0-6%7 PRISM_ALLOW_SUBMIT=1 bash scripts/yancheng/submit_v4.sh extrac
 本机`python -m prism.v4.evaluation run-local ...`默认预览。另获新金额上限后显式`--execute --budget-usd ... --ledger .../v4-eval.sqlite`；拒绝复用V3/V2账本。唯一锁、结算和未知费用预留使用已有实现。本次API调用0。
 
 V3已经完成的结果与权重、Design、14k选样、定标和SFT资产保留。V4复用通用HH/优化/采样/审计模块，但schema、配置指纹、输出目录及费用身份独立。不把V3完成状态记为V4完成。
+
+## 本次工程验收记录
+
+2026-11-18：主工程`f2589ff`已普通推送origin/v4并核对一致。生产SIF保持原SHA，V4隔离层seal为`b7c0a1828b1f8812113c3e6e102501f7fddcf10757b788ee2eabce622d2aabfa`。
+
+- CPU运行层安装1989080：COMPLETED/0，24秒，离线安装四固定wheel，`pip check`与Olmo3/PEFT导入通过。
+- 生产SIF＋V4层全库1989082：COMPLETED/0，163秒；**430 passed、1 skipped**，实际Torch2.7.1+cu126、Python3.11，包含真实tiny OLMo3/PEFT PPO及数值对照。
+- 生产运行时检查1989083：COMPLETED/0，22秒；Olmo3注册及全部固定版本通过，没有加载模型或使用GPU。
+- 本机原V3依赖环境全库：**407 passed、15 skipped**。本机V4专项及受影响模块59 passed。生产验收后仅将V4报告中的历史N14000字段改为通用`formal_reward_reference`，两版本冻结头及V4链专项另行**5 passed**；训练/推理算法未再修改。
+- 三作业共**0.220000 CPU核时、0 GPU卡时、0 API调用**，均已结束，实查本人Slurm队列为空。日志、输入换行失败的原清单、运行层manifest与SHA在本机忽略目录`local/v4-execution`保留；V3/2/main分支指针未动。
+
+以上只验收工程与CPU环境；完整7B权重尚未下载，7B真实model/policy GPU smoke、全池Reward和正式V4实验尚未运行。不得将小模型通过写成7B全量通过。
