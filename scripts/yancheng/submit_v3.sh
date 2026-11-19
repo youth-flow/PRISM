@@ -21,7 +21,7 @@ case "$stage" in
   prepare-data|geometry|geometry-audit|design|freeze-study|audit) cpus=16; memory=24G; duration=12:00:00 ;;
   merge-features) cpus=8; memory=12G; duration=04:00:00 ;;
   reward|audit-training|full-pool-reward|full-pool-reward-report|lora-reward-data|lora-reward-report) cpus=8; memory=12G; duration=04:00:00 ;;
-  linear-ppo-audit) cpus=4; memory=12G; duration=02:00:00 ;;
+  linear-ppo-audit) cpus=8; memory=12G; duration=02:00:00 ;;
   cpu-smoke) cpus=4; memory=6G; duration=01:00:00 ;;
   validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate|lora-ppo-admit|lora-ppo-eval-freeze|lora-ppo-judge-export|lora-ppo-judge-import|lora-ppo-aggregate|lora-ppo-ifeval-sft|lora-ppo-ifeval-merge|linear-ppo-admit) ;;
   *) prism_die "Unsupported V3 compute stage; paid Judges run locally: $stage" ;;
