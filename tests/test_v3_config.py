@@ -47,7 +47,11 @@ def test_plan_validate_and_resource_do_not_create_run(tmp_path, capsys):
                     ["resource", "--for-stage", "lora-ppo-smoke"],
                     ["resource", "--for-stage", "lora-ppo-policy"],
                     ["resource", "--for-stage", "lora-ppo-ifeval-generate"],
-                    ["resource", "--for-stage", "lora-ppo-admit"], ["status"]):
+                    ["resource", "--for-stage", "lora-ppo-admit"],
+                    ["resource", "--for-stage", "linear-ppo-admit"],
+                    ["resource", "--for-stage", "linear-ppo-smoke"],
+                    ["resource", "--for-stage", "linear-ppo-policy"],
+                    ["resource", "--for-stage", "linear-ppo-audit"], ["status"]):
         main(command + ["--config", c["_config_path"]])
         assert not Path(c["output"]).exists()
         capsys.readouterr()
@@ -60,6 +64,17 @@ def test_lora_ppo_policy_requires_explicit_stop_checkpoint(tmp_path):
     c = configuration(tmp_path)
     with pytest.raises(SystemExit):
         main(["lora-ppo-policy", "--execute", "--config", c["_config_path"]])
+    assert not Path(c["output"]).exists()
+
+
+def test_linear_ppo_policy_requires_method_and_explicit_stop(tmp_path):
+    c = configuration(tmp_path)
+    with pytest.raises(SystemExit):
+        main(["linear-ppo-policy", "--execute", "--config", c["_config_path"],
+              "--method", "empirical"])
+    with pytest.raises(SystemExit):
+        main(["linear-ppo-policy", "--execute", "--config", c["_config_path"],
+              "--stop-after-episodes", "16384"])
     assert not Path(c["output"]).exists()
 
 

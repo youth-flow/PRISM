@@ -12,9 +12,14 @@ printf '%s  %s\n' "${PRISM_V3_SOURCE_MANIFEST_SHA256:?}" "$PRISM_V3_SOURCE_DIR/.
 printf '%s  %s\n' "${PRISM_IMAGE_SHA256:?}" "$PRISM_IMAGE" | sha256sum --check --status
 stage="${1:?Supply a V3 stage}"; shift
 distributed_gpus=1
-if [[ "$stage" == lora-ppo-smoke || "$stage" == lora-ppo-policy ]]; then
+if [[ "$stage" == lora-ppo-smoke || "$stage" == lora-ppo-policy \
+   || "$stage" == linear-ppo-smoke || "$stage" == linear-ppo-policy ]]; then
   distributed_gpus="${PRISM_DISTRIBUTED_GPUS:-4}"
-  [[ "$distributed_gpus" == 4 || "$distributed_gpus" == 8 ]] || prism_die "Distributed LoRA PPO uses 4 or 8 homogeneous GPUs"
+  if [[ "$stage" == linear-ppo-smoke || "$stage" == linear-ppo-policy ]]; then
+    [[ "$distributed_gpus" == 4 ]] || prism_die "Matched linear PPO uses exactly 4 homogeneous GPUs per method"
+  else
+    [[ "$distributed_gpus" == 4 || "$distributed_gpus" == 8 ]] || prism_die "Distributed LoRA PPO uses 4 or 8 homogeneous GPUs"
+  fi
 fi
 if [[ "$stage" != cpu-smoke ]]; then
   printf '%s  %s\n' "${PRISM_CONFIG_SHA256:?}" "${PRISM_CONFIG_PATH:?}" | sha256sum --check --status
@@ -78,12 +83,14 @@ if [[ "$PRISM_STAGE_RESOURCE" == gpu ]]; then
   "${runner[@]}" python /opt/prism/scripts/smoke_gpu.py
 fi
 cli=("$@")
-if [[ "$stage" == lora-ppo-policy ]]; then
+if [[ "$stage" == lora-ppo-policy || "$stage" == linear-ppo-policy ]]; then
   stop_after=""
   for ((i=0; i<${#cli[@]}; i++)); do
     if [[ "${cli[$i]}" == --stop-after-episodes && $((i+1)) -lt ${#cli[@]} ]]; then stop_after="${cli[$((i+1))]}"; fi
   done
-  [[ "$stop_after" =~ ^[1-9][0-9]*$ ]] || prism_die "LoRA PPO policy requires an explicit positive --stop-after-episodes checkpoint"
+  [[ "$stop_after" =~ ^[1-9][0-9]*$ ]] || prism_die "Distributed PPO policy requires an explicit positive --stop-after-episodes checkpoint"
+  [[ "$stage" != linear-ppo-policy || "$stop_after" == 16384 ]] \
+    || prism_die "Formal linear PPO horizon is exactly 16384 episodes"
 fi
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score || "$stage" == lora-ppo-ifeval-generate ]] || prism_die "Unexpected V3 array stage"

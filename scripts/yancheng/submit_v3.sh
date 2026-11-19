@@ -13,14 +13,17 @@ case "$stage" in
   lora-ppo-normalize) gpu=1; cpus=4; memory=24G; duration=04:00:00 ;;
   lora-ppo-smoke) gpu="${PRISM_DISTRIBUTED_GPUS:-4}"; cpus=$((gpu*8)); memory="$((gpu*64))G"; duration=02:00:00 ;;
   lora-ppo-policy) gpu="${PRISM_DISTRIBUTED_GPUS:-4}"; cpus=$((gpu*8)); memory="$((gpu*64))G"; duration=24:00:00 ;;
+  linear-ppo-smoke) gpu=4; cpus=32; memory=256G; duration=02:00:00 ;;
+  linear-ppo-policy) gpu=4; cpus=32; memory=256G; duration=12:00:00 ;;
   policy) gpu=1; cpus=8; memory=64G; duration=24:00:00 ;;
   model-smoke|shared-smoke) gpu=1; cpus=8; memory=64G; duration=01:00:00 ;;
   download-data) cpus=4; memory=6G; duration=04:00:00 ;;
   prepare-data|geometry|geometry-audit|design|freeze-study|audit) cpus=16; memory=24G; duration=12:00:00 ;;
   merge-features) cpus=8; memory=12G; duration=04:00:00 ;;
   reward|audit-training|full-pool-reward|full-pool-reward-report|lora-reward-data|lora-reward-report) cpus=8; memory=12G; duration=04:00:00 ;;
+  linear-ppo-audit) cpus=4; memory=12G; duration=02:00:00 ;;
   cpu-smoke) cpus=4; memory=6G; duration=01:00:00 ;;
-  validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate|lora-ppo-admit|lora-ppo-eval-freeze|lora-ppo-judge-export|lora-ppo-judge-import|lora-ppo-aggregate|lora-ppo-ifeval-sft|lora-ppo-ifeval-merge) ;;
+  validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate|lora-ppo-admit|lora-ppo-eval-freeze|lora-ppo-judge-export|lora-ppo-judge-import|lora-ppo-aggregate|lora-ppo-ifeval-sft|lora-ppo-ifeval-merge|linear-ppo-admit) ;;
   *) prism_die "Unsupported V3 compute stage; paid Judges run locally: $stage" ;;
 esac
 prism_check_paths
@@ -40,18 +43,23 @@ if [[ "$stage" != cpu-smoke ]]; then
   prism_path_under "$PRISM_STORAGE" "$PRISM_CONFIG_PATH"
   PRISM_CONFIG_SHA256="$(sha256sum "$PRISM_CONFIG_PATH" | cut -d ' ' -f 1)"
 fi
-if [[ "$stage" == lora-ppo-policy ]]; then
+if [[ "$stage" == lora-ppo-policy || "$stage" == linear-ppo-policy ]]; then
   stop_after=""
   for ((i=0; i<${#cli[@]}; i++)); do
     if [[ "${cli[$i]}" == --stop-after-episodes && $((i+1)) -lt ${#cli[@]} ]]; then stop_after="${cli[$((i+1))]}"; fi
   done
-  [[ "$stop_after" =~ ^[1-9][0-9]*$ ]] || prism_die "LoRA PPO policy requires an explicit positive --stop-after-episodes checkpoint"
+  [[ "$stop_after" =~ ^[1-9][0-9]*$ ]] || prism_die "Distributed PPO policy requires an explicit positive --stop-after-episodes checkpoint"
+  [[ "$stage" != linear-ppo-policy || "$stop_after" == 16384 ]] \
+    || prism_die "Formal linear PPO horizon is exactly 16384 episodes"
 fi
 requested_cpus="${PRISM_CPUS:-$cpus}"
 requested_memory="${PRISM_MEMORY:-$memory}"
-if [[ "$stage" == lora-ppo-smoke || "$stage" == lora-ppo-policy ]]; then
+if [[ "$stage" == lora-ppo-smoke || "$stage" == lora-ppo-policy \
+   || "$stage" == linear-ppo-smoke || "$stage" == linear-ppo-policy ]]; then
   [[ "$gpu" == 4 || "$gpu" == 8 ]] \
-    || prism_die "Distributed LoRA PPO uses exactly 4 or 8 homogeneous GPUs"
+    || prism_die "Distributed PPO uses exactly 4 or 8 homogeneous GPUs"
+  [[ "$stage" != linear-ppo-smoke && "$stage" != linear-ppo-policy || "$gpu" == 4 ]] \
+    || prism_die "Matched linear PPO uses exactly 4 GPUs per method"
   [[ "$requested_cpus" =~ ^[1-9][0-9]*$ && $((requested_cpus%gpu)) -eq 0
      && "$requested_cpus" -ge $((gpu*8)) ]] \
     || prism_die "Distributed LoRA PPO requires at least 8 CPU cores per GPU, evenly divided"

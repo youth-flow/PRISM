@@ -9,7 +9,7 @@ from .config import load_config, plan
 GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "evaluate-generate", "model-smoke",
               "lora-reward-smoke", "lora-reward-train", "lora-reward-score",
               "lora-ppo-normalize", "lora-ppo-smoke", "lora-ppo-policy",
-              "lora-ppo-ifeval-generate"}
+              "lora-ppo-ifeval-generate", "linear-ppo-smoke", "linear-ppo-policy"}
 STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-data", "extract-features",
           "merge-features", "geometry", "geometry-audit", "design", "design-report", "freeze-study", "sample", "reward",
           "prepare-shared", "merge-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
@@ -19,7 +19,8 @@ STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-da
           "lora-ppo-normalize", "lora-ppo-smoke", "lora-ppo-policy", "lora-ppo-admit",
           "lora-ppo-eval-freeze", "lora-ppo-judge-export", "lora-ppo-judge-import",
           "lora-ppo-aggregate", "lora-ppo-ifeval-sft", "lora-ppo-ifeval-generate",
-          "lora-ppo-ifeval-merge")
+          "lora-ppo-ifeval-merge", "linear-ppo-admit", "linear-ppo-smoke",
+          "linear-ppo-policy", "linear-ppo-audit")
 
 
 def stage_resource(stage):
@@ -44,6 +45,8 @@ def main(argv=None):
     parser.add_argument("--user-budget-confirmed", action="store_true", help="Record the user's N decision after reviewing Design")
     parser.add_argument("--user-lora-ppo-confirmed", action="store_true",
                         help="Bind explicit continuation authority after reviewing the LoRA PPO episode-8192 gate")
+    parser.add_argument("--user-linear-ppo-confirmed", action="store_true",
+                        help="Bind the user's 16k horizon for both audited 14k linear Rewards")
     parser.add_argument("--stop-after-episodes", type=int)
     parser.add_argument("--evaluation-episode", type=int,
                         help="Namespace LoRA blind evaluation by a completed PPO checkpoint")
@@ -192,6 +195,23 @@ def main(argv=None):
                 value = lora_ppo.train_policy(c, stop_after_episodes=args.stop_after_episodes, resume=args.resume)
             else:
                 value = lora_ppo.admit_continuation(c, user_confirmed=args.user_lora_ppo_confirmed)
+        elif args.stage.startswith("linear-ppo-"):
+            from . import linear_ppo
+            if args.stage == "linear-ppo-admit":
+                value = linear_ppo.admit(c, user_confirmed=args.user_linear_ppo_confirmed)
+            else:
+                if args.method not in ("empirical", "prism"):
+                    parser.error(f"{args.stage} requires --method empirical or prism")
+                if args.stage == "linear-ppo-smoke":
+                    value = linear_ppo.policy_smoke(c, args.method)
+                elif args.stage == "linear-ppo-policy":
+                    if args.stop_after_episodes is None:
+                        parser.error("linear-ppo-policy requires --stop-after-episodes 16384")
+                    value = linear_ppo.train_policy(
+                        c, args.method, stop_after_episodes=args.stop_after_episodes,
+                        resume=args.resume)
+                else:
+                    value = linear_ppo.audit_policy(c, args.method)
         elif args.stage == "prepare-shared":
             if args.shards is None:
                 from .ppo import prepare_shared
