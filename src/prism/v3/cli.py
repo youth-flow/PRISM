@@ -8,7 +8,8 @@ from .config import load_config, plan
 
 GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "evaluate-generate", "model-smoke",
               "lora-reward-smoke", "lora-reward-train", "lora-reward-score",
-              "lora-ppo-normalize", "lora-ppo-smoke", "lora-ppo-policy"}
+              "lora-ppo-normalize", "lora-ppo-smoke", "lora-ppo-policy",
+              "lora-ppo-ifeval-generate"}
 STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-data", "extract-features",
           "merge-features", "geometry", "geometry-audit", "design", "design-report", "freeze-study", "sample", "reward",
           "prepare-shared", "merge-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
@@ -17,7 +18,8 @@ STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-da
           "lora-reward-train", "lora-reward-score", "lora-reward-report",
           "lora-ppo-normalize", "lora-ppo-smoke", "lora-ppo-policy", "lora-ppo-admit",
           "lora-ppo-eval-freeze", "lora-ppo-judge-export", "lora-ppo-judge-import",
-          "lora-ppo-aggregate")
+          "lora-ppo-aggregate", "lora-ppo-ifeval-sft", "lora-ppo-ifeval-generate",
+          "lora-ppo-ifeval-merge")
 
 
 def stage_resource(stage):
@@ -45,6 +47,10 @@ def main(argv=None):
     parser.add_argument("--stop-after-episodes", type=int)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--results")
+    parser.add_argument("--ifeval-input")
+    parser.add_argument("--ifeval-source")
+    parser.add_argument("--nltk-data")
+    parser.add_argument("--sft-ifeval-dir")
     parser.add_argument("--complete", action="store_true", help="Require every formal stage in the final audit")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -150,6 +156,23 @@ def main(argv=None):
         elif args.stage == "lora-ppo-aggregate":
             from .lora_evaluation import aggregate
             value = aggregate(c)
+        elif args.stage in ("lora-ppo-ifeval-sft", "lora-ppo-ifeval-generate", "lora-ppo-ifeval-merge"):
+            required = (args.ifeval_input, args.ifeval_source, args.nltk_data)
+            if any(item is None for item in required):
+                parser.error("LoRA PPO IFEval requires --ifeval-input, --ifeval-source and --nltk-data")
+            from . import lora_ifeval
+            if args.stage == "lora-ppo-ifeval-sft":
+                if args.sft_ifeval_dir is None:
+                    parser.error("LoRA PPO SFT IFEval import requires --sft-ifeval-dir")
+                value = lora_ifeval.import_sft(c, *required, args.sft_ifeval_dir)
+            elif args.stage == "lora-ppo-ifeval-generate":
+                if args.shards is None:
+                    parser.error("LoRA PPO IFEval generation requires --shards")
+                value = lora_ifeval.generate(c, args.shard_index, args.shards, *required)
+            else:
+                if args.shards is None or args.sft_ifeval_dir is None:
+                    parser.error("LoRA PPO IFEval merge requires --shards and --sft-ifeval-dir")
+                value = lora_ifeval.merge(c, args.shards, *required, args.sft_ifeval_dir)
         elif args.stage.startswith("lora-ppo-"):
             if args.stage == "lora-ppo-policy" and args.stop_after_episodes is None:
                 parser.error("lora-ppo-policy requires an explicit --stop-after-episodes checkpoint")

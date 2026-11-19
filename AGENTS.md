@@ -1,6 +1,6 @@
 # PRISM 工作约定
 
-- **65k PPO续跑与32k独立Luna评价（2026-11-19，最新用户指令）**：用户澄清要求高效正确把PPO跑完，原32k盲评后序1992418/1992419均在PENDING/0分配时取消；正式PPO1992422自09:00:36在gpu045使用原验收源94ef60b、8×4090、world8从32768续到65536，配置/Reward/超参不改。用户随后明确授权同时评价32k checkpoint vs SFT，Judge固定`gpt-6-luna` medium、500最终题×AB/BA=1000个有效判断、独立硬上限USD100，按实际用量结算且不得跨packet；OpenAI密钥只允许本机进程注入，不写仓库/集群/产物。独立评价选择须保存当时latest指针的不可变快照，不能因65k更新live latest破坏32k证据；生成可并行，但付费调用仅在packet、隔离账本和$100合同绑定后开始。
+- **65k PPO续跑与32k独立Luna/IFEval评价（2026-11-19，最新用户指令）**：用户澄清要求高效正确把PPO跑完，原32k盲评后序1992418/1992419均在PENDING/0分配时取消；正式PPO1992422自09:00:36在gpu045使用原验收源94ef60b、8×4090、world8从32768续到65536，配置/Reward/超参不改。用户随后明确授权并行评价32k checkpoint vs SFT的win rate、KL和官方IFEval；Judge固定`gpt-6-luna` medium、500最终题×AB/BA=1000个有效判断、独立硬上限USD100，按实际用量结算且不得跨packet；OpenAI密钥只允许本机进程注入，不写仓库/集群/产物。IFEval固定541题/834指令、greedy/cap2048和fixed-RNG官方评分；相同SFT模型revision的既有回答仅在原receipt及独立复算全通过时复用。独立评价选择须保存当时latest指针的不可变快照，不能因65k更新live latest破坏32k证据；生成可并行，但付费调用仅在packet、隔离账本和$100合同绑定后开始。
 
 - **32k独立盲评工程继续授权（2026-11-19）**：用户在32k阶段报告和“先独立PPO-vs-SFT盲评、不直接65k”的建议后明确“继续”。因此允许冻结episode32768并在未用于训练/选参的最终500题生成LoRA PPO回答、复用原SFT回答、导出隔离的1000判断AB/BA包；不授权付费API金额，OpenAI调用仍为0，原三方法packet/结果/账本不得覆盖。新增`full-pool-lora`评价只恢复已冻结分布式checkpoint的Actor训练张量，不要求伪造65k完成receipt；选择/生成/merge/Judge export/import/aggregate均使用独立stage和目录。本机专项50 passed/1 skipped、全库377 passed/19 skipped；须普通提交并推`origin/Lora`，生产SIF全库和真实4090 canary通过后才能并行全500生成。
 

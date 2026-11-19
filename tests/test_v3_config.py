@@ -46,6 +46,7 @@ def test_plan_validate_and_resource_do_not_create_run(tmp_path, capsys):
                     ["resource", "--for-stage", "lora-ppo-normalize"],
                     ["resource", "--for-stage", "lora-ppo-smoke"],
                     ["resource", "--for-stage", "lora-ppo-policy"],
+                    ["resource", "--for-stage", "lora-ppo-ifeval-generate"],
                     ["resource", "--for-stage", "lora-ppo-admit"], ["status"]):
         main(command + ["--config", c["_config_path"]])
         assert not Path(c["output"]).exists()

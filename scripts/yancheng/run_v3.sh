@@ -86,7 +86,7 @@ if [[ "$stage" == lora-ppo-policy ]]; then
   [[ "$stop_after" =~ ^[1-9][0-9]*$ ]] || prism_die "LoRA PPO policy requires an explicit positive --stop-after-episodes checkpoint"
 fi
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
-  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score ]] || prism_die "Unexpected V3 array stage"
+  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score || "$stage" == lora-ppo-ifeval-generate ]] || prism_die "Unexpected V3 array stage"
   cli+=(--shard-index "$SLURM_ARRAY_TASK_ID")
 fi
 if [[ "$distributed_gpus" -gt 1 ]]; then

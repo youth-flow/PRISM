@@ -62,3 +62,5 @@ bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-judge-export --config "$cf
 ```
 
 盲评包独立写入`judge/lora-ppo`，只包含`full_pool_lora_vs_sft`的500题×AB/BA=1000个有效判断，不覆盖原Empirical/PRISM包、结果或账本。集群只生成和导出，明确金额上限前不得运行本机付费Judge；结果使用`lora-ppo-judge-import`和`lora-ppo-aggregate`进入独立汇总。
+
+IFEval沿用同一OLMo SFT模型revision、官方541题/834指令、greedy、cap2048和`ifeval_fixed_rng_v1`。既有SFT回答只有在原V2 receipt、模型revision、输入/官方源码/NLTK资产及独立复算全部一致时才导入；32k Actor按全局题号分片生成，合并后报告四项官方指标和相对SFT的逐题prompt-strict差值及bootstrap区间。入口为`lora-ppo-ifeval-sft`、`lora-ppo-ifeval-generate`和`lora-ppo-ifeval-merge`，资产路径必须显式传入且全部进入receipt。

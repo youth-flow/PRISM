@@ -7,7 +7,7 @@ if [[ "${1:-}" == --dry-run ]]; then dry=1; shift; fi
 stage="${1:?Supply a V3 compute stage}"; shift
 gpu=0; cpus=2; memory=3G; duration=01:00:00
 case "$stage" in
-  extract-features|prepare-shared|evaluate-generate|lora-reward-score) gpu=1; cpus=2; memory=16G; duration=12:00:00 ;;
+  extract-features|prepare-shared|evaluate-generate|lora-reward-score|lora-ppo-ifeval-generate) gpu=1; cpus=2; memory=16G; duration=12:00:00 ;;
   lora-reward-train) gpu=1; cpus=8; memory=48G; duration=48:00:00 ;;
   lora-reward-smoke) gpu=1; cpus=4; memory=24G; duration=01:00:00 ;;
   lora-ppo-normalize) gpu=1; cpus=4; memory=24G; duration=04:00:00 ;;
@@ -20,7 +20,7 @@ case "$stage" in
   merge-features) cpus=8; memory=12G; duration=04:00:00 ;;
   reward|audit-training|full-pool-reward|full-pool-reward-report|lora-reward-data|lora-reward-report) cpus=8; memory=12G; duration=04:00:00 ;;
   cpu-smoke) cpus=4; memory=6G; duration=01:00:00 ;;
-  validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate|lora-ppo-admit|lora-ppo-eval-freeze|lora-ppo-judge-export|lora-ppo-judge-import|lora-ppo-aggregate) ;;
+  validate|plan|status|design-report|sample|merge-shared|normalize-reward|merge-evaluation|judge-export|judge-import|aggregate|lora-ppo-admit|lora-ppo-eval-freeze|lora-ppo-judge-export|lora-ppo-judge-import|lora-ppo-aggregate|lora-ppo-ifeval-sft|lora-ppo-ifeval-merge) ;;
   *) prism_die "Unsupported V3 compute stage; paid Judges run locally: $stage" ;;
 esac
 prism_check_paths
@@ -91,7 +91,7 @@ if [[ -n "${PRISM_DEPENDENCY:-}" ]]; then
 fi
 new_tasks=1
 if [[ -n "${PRISM_ARRAY:-}" ]]; then
-  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score ]] || prism_die "Only independent feature/generation/scoring shards use arrays"
+  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score || "$stage" == lora-ppo-ifeval-generate ]] || prism_die "Only independent feature/generation/scoring shards use arrays"
   [[ "$PRISM_ARRAY" =~ ^([0-9]+)-([0-9]+)%([0-9]+)$ ]] || prism_die "Array needs FIRST-LAST%CONCURRENCY"
   first=$((10#${BASH_REMATCH[1]})); last=$((10#${BASH_REMATCH[2]})); concurrent=$((10#${BASH_REMATCH[3]}))
   [[ "$first" -le "$last" && "$concurrent" -ge 1 && "$concurrent" -le 50 ]] || prism_die "Invalid array range/concurrency"

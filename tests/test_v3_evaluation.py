@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from prism.io import digest, rows
-from prism.v3.artifacts import Run, config_hash, read_json, write_json
+from prism.v3.artifacts import Run, config_hash, hash_json, read_json, write_json
 from prism.v3.evaluation import (METHODS, aggregate, evaluate_generate, export_judge,
                                  generation_seed, import_judge, merge_evaluation,
                                  run_local, score_comparison)
@@ -21,6 +21,7 @@ from prism.v3.lora_evaluation import (aggregate as aggregate_lora,
                                       freeze_selection as freeze_lora_selection,
                                       import_judge as import_lora_judge,
                                       load_selected_actor)
+from prism.v3 import lora_ifeval
 
 
 @pytest.fixture(autouse=True)
@@ -188,6 +189,29 @@ def test_lora_evaluation_loader_restores_selected_actor_only(tmp_path, monkeypat
     monkeypatch.setattr("prism.v3.ppo_trainer.seed_everything", lambda seed: None)
     actor, token = load_selected_actor(c)
     assert float(actor.weight.detach()) == 3.25 and token == "fixture-tokenizer" and not actor.training
+
+
+def test_lora_ifeval_shards_preserve_global_indices_and_selection(tmp_path, monkeypatch):
+    c, run, _ = fixture(tmp_path)
+    freeze_lora_fixture(c, run)
+    prompts = [{"id": f"ifeval:{i}", "messages": [{"role": "user", "content": f"rule {i}"}]}
+               for i in range(5)]
+    monkeypatch.setattr(lora_ifeval, "_benchmark", lambda *args: ({}, prompts, []))
+
+    def generate(c, prompt, index):
+        tokens = [index + 1, 2]
+        return {"id": prompt["id"], "index": index, "method": "full-pool-lora",
+                "messages": prompt["messages"], "prompt_sha256": hash_json(prompt["messages"]),
+                "generation_seed": lora_ifeval.generation_seed(c, index), "response": f"answer {index}",
+                "response_tokens": tokens, "response_length": len(tokens), "eos": True,
+                "truncated": False, "config_sha256": config_hash(c)}
+
+    for shard in range(2):
+        lora_ifeval.generate(c, shard, 2, "input", "source", "nltk", generator=generate)
+    assert [row["index"] for row in rows(run.file(
+        "evaluation/full-pool-lora/ifeval/shards/part-00000-of-00002.jsonl"))] == [0, 2, 4]
+    assert [row["index"] for row in rows(run.file(
+        "evaluation/full-pool-lora/ifeval/shards/part-00001-of-00002.jsonl"))] == [1, 3]
 
 
 def test_tie_half_is_distinct_from_position_disagreement(tmp_path):
