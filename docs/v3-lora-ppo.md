@@ -46,3 +46,19 @@ bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-admit --config "$cfg" --us
 ```
 
 normalize为1GPU/4CPU/24G。smoke和policy默认4张同型GPU、每卡至少8CPU/64G主存；设置`PRISM_DISTRIBUTED_GPUS=8`可在整节点空闲且同型时改为8卡。policy默认24小时只是单次作业时限，不代表完整horizon必然在24小时内结束。配置文件保持原字节，新增路径复用旧run的hash绑定资产并写入独立`diagnostics/full-pool-lora-ppo`、`policy/full-pool-lora`和`lora-ppo-*` receipts。
+
+## 独立盲评
+
+阶段性checkpoint不会伪装成完整65k策略目录。先用CPU入口把已审阅的绝对episode、分布式checkpoint、report和train/dev probe哈希冻结，再由普通`evaluate-generate --method full-pool-lora`重建SFT+LoRA Actor并只恢复该checkpoint的Actor训练张量。最终500题、prompt级seed、T=1、cap512以及actor−SFT序列log-ratio语义与V3正式评价一致；已有SFT回答必须通过原receipt逐哈希复用。
+
+```bash
+bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-eval-freeze \
+  --config "$cfg" --stop-after-episodes 32768 --execute
+bash scripts/yancheng/submit_v3.sh --dry-run evaluate-generate \
+  --config "$cfg" --method full-pool-lora --shards 8 --execute
+bash scripts/yancheng/submit_v3.sh --dry-run merge-evaluation \
+  --config "$cfg" --method full-pool-lora --shards 8 --execute
+bash scripts/yancheng/submit_v3.sh --dry-run lora-ppo-judge-export --config "$cfg" --execute
+```
+
+盲评包独立写入`judge/lora-ppo`，只包含`full_pool_lora_vs_sft`的500题×AB/BA=1000个有效判断，不覆盖原Empirical/PRISM包、结果或账本。集群只生成和导出，明确金额上限前不得运行本机付费Judge；结果使用`lora-ppo-judge-import`和`lora-ppo-aggregate`进入独立汇总。

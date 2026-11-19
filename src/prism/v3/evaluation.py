@@ -20,6 +20,8 @@ from .artifacts import Run, config_hash, hash_json, read_json, write_json
 
 
 METHODS = ("sft", "empirical", "prism")
+LORA_METHOD = "full-pool-lora"
+GENERATION_METHODS = (*METHODS, LORA_METHOD)
 JUDGE_KEYS = ("backend", "model", "api", "base_url", "api_key_env", "reasoning_effort",
               "service_tier", "max_output_tokens", "max_attempts", "timeout_seconds")
 
@@ -59,6 +61,9 @@ def _model_config(c):
 
 
 def _load_generator(c, method):
+    if method == LORA_METHOD:
+        from .lora_evaluation import load_selected_actor
+        return load_selected_actor(c)
     from prism.hf import load_lm, tokenizer
     legacy = _model_config(c)
     token = tokenizer(legacy)
@@ -133,14 +138,17 @@ def _validate_row(c, row, expected, index, method):
 
 def evaluate_generate(c, method, shard_index=0, shards=1, *, generator=None):
     """Generate a disjoint shard. Only incomplete shard prefixes are resumed."""
-    if method not in METHODS or type(shards) is not int or shards < 1 or type(shard_index) is not int or not 0 <= shard_index < shards:
+    if method not in GENERATION_METHODS or type(shards) is not int or shards < 1 or type(shard_index) is not int or not 0 <= shard_index < shards:
         raise ValueError("Invalid evaluation method or shard")
     run = Run(c)
     prompts = _prompts(c, run)
     if shards > len(prompts):
         raise ValueError("More evaluation shards than prompts")
     dependencies = [run.receipt_path("data")]
-    if method != "sft":
+    if method == LORA_METHOD:
+        run.require("lora-ppo-evaluation-selection")
+        dependencies.append(run.receipt_path("lora-ppo-evaluation-selection"))
+    elif method != "sft":
         run.require(f"policy-{method}")
         dependencies.append(run.receipt_path(f"policy-{method}"))
     stage = f"eval-{method}-part-{shard_index:05d}-of-{shards:05d}"
@@ -175,7 +183,7 @@ def evaluate_generate(c, method, shard_index=0, shards=1, *, generator=None):
 def merge_evaluation(c, method, shards):
     run = Run(c)
     prompts = _prompts(c, run)
-    if method not in METHODS or type(shards) is not int or not 1 <= shards <= len(prompts):
+    if method not in GENERATION_METHODS or type(shards) is not int or not 1 <= shards <= len(prompts):
         raise ValueError("Invalid evaluation shard count")
     stage = f"eval-{method}"
     if run.completed(stage):

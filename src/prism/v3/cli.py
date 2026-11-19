@@ -15,7 +15,9 @@ STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-da
           "judge-export", "judge-import", "aggregate", "audit", "model-smoke", "shared-smoke", "audit-training",
           "full-pool-reward", "full-pool-reward-report", "lora-reward-data", "lora-reward-smoke",
           "lora-reward-train", "lora-reward-score", "lora-reward-report",
-          "lora-ppo-normalize", "lora-ppo-smoke", "lora-ppo-policy", "lora-ppo-admit")
+          "lora-ppo-normalize", "lora-ppo-smoke", "lora-ppo-policy", "lora-ppo-admit",
+          "lora-ppo-eval-freeze", "lora-ppo-judge-export", "lora-ppo-judge-import",
+          "lora-ppo-aggregate")
 
 
 def stage_resource(stage):
@@ -30,7 +32,7 @@ def main(argv=None):
     parser.add_argument("--config", default=str(Path(__file__).resolve().parents[3] / "configs/experiment.v3.yaml"))
     parser.add_argument("--execute", action="store_true", help="Explicitly execute a stage; never sets a paid-call allowance")
     parser.add_argument("--for-stage", choices=STAGES)
-    parser.add_argument("--method", choices=["sft", "empirical", "prism"])
+    parser.add_argument("--method", choices=["sft", "empirical", "prism", "full-pool-lora"])
     parser.add_argument("--source-manifest")
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shards", type=int)
@@ -132,6 +134,22 @@ def main(argv=None):
                 from . import lora_reward_evaluation
                 value = (lora_reward_evaluation.score(c, args.shard_index, args.shards) if args.stage == "lora-reward-score"
                          else lora_reward_evaluation.summarize(c, args.shards))
+        elif args.stage == "lora-ppo-eval-freeze":
+            if args.stop_after_episodes is None:
+                parser.error("lora-ppo-eval-freeze requires --stop-after-episodes")
+            from .lora_evaluation import freeze_selection
+            value = freeze_selection(c, args.stop_after_episodes)
+        elif args.stage == "lora-ppo-judge-export":
+            from .lora_evaluation import export_judge
+            value = export_judge(c)
+        elif args.stage == "lora-ppo-judge-import":
+            if not args.results:
+                parser.error("lora-ppo-judge-import requires --results")
+            from .lora_evaluation import import_judge
+            value = import_judge(c, args.results)
+        elif args.stage == "lora-ppo-aggregate":
+            from .lora_evaluation import aggregate
+            value = aggregate(c)
         elif args.stage.startswith("lora-ppo-"):
             if args.stage == "lora-ppo-policy" and args.stop_after_episodes is None:
                 parser.error("lora-ppo-policy requires an explicit --stop-after-episodes checkpoint")

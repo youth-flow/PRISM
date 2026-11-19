@@ -16,6 +16,11 @@ from prism.v3.artifacts import Run, config_hash, read_json, write_json
 from prism.v3.evaluation import (METHODS, aggregate, evaluate_generate, export_judge,
                                  generation_seed, import_judge, merge_evaluation,
                                  run_local, score_comparison)
+from prism.v3.lora_evaluation import (aggregate as aggregate_lora,
+                                      export_judge as export_lora_judge,
+                                      freeze_selection as freeze_lora_selection,
+                                      import_judge as import_lora_judge,
+                                      load_selected_actor)
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +73,32 @@ def generate_all(c, shards=2):
         merge_evaluation(c, method, shards)
 
 
+def freeze_lora_fixture(c, run, episode=32768, checkpoint_payload=None):
+    admission = run.file("control/lora-ppo-admission.json")
+    write_json(admission, {"user_confirmed": True, "episode": 8192})
+    run.publish("lora-ppo-admission", [admission])
+    folder = run.file("policy/full-pool-lora")
+    checkpoint = folder/f"checkpoints/episode-{episode:08d}.pt"
+    checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    if checkpoint_payload is None:
+        checkpoint.write_bytes(b"audited checkpoint fixture")
+    else:
+        import torch
+        torch.save(checkpoint_payload, checkpoint)
+    latest = folder/"checkpoints/latest.json"
+    write_json(latest, {"episode": episode, "path": checkpoint.name,
+                        "sha256": digest(checkpoint), "contract_hash": "fixture-contract",
+                        "world_size": 8, "diagnostics_due": True})
+    report = folder/f"report-{episode:08d}.json"
+    write_json(report, {"completed_episodes": episode, "distributed_world_size": 8})
+    for name in ("train_probe", "dev_probe"):
+        path = folder/f"probes/{episode:08d}-{name}.json"
+        write_json(path, {"episode": episode, "probe": name,
+                          "checkpoint_sha256": digest(checkpoint),
+                          "shared_probe_sha256": "shared-fixture"})
+    return freeze_lora_selection(c, episode)
+
+
 def test_shards_cover_order_and_preserve_negative_mc_kl(tmp_path):
     c, run, prompts = fixture(tmp_path)
     generate_all(c)
@@ -100,6 +131,61 @@ def test_shard_prefix_resume_does_not_repeat_answers(tmp_path):
     assert resumed == [2, 3]
     merge_evaluation(c, "sft", 1)
     assert len(rows(run.file("evaluation/sft/responses.jsonl"))) == 4
+
+
+def test_lora_checkpoint_selection_and_blind_packet_are_isolated(tmp_path, monkeypatch):
+    c, run, prompts = fixture(tmp_path)
+    selected = freeze_lora_fixture(c, run)
+    assert selected["episode"] == 32768 and selected["method"] == "full-pool-lora"
+    for method in ("sft", "full-pool-lora"):
+        for shard in range(2):
+            evaluate_generate(c, method, shard, 2, generator=fake_generator)
+        merge_evaluation(c, method, 2)
+    receipt = export_lora_judge(c)
+    packet = read_json(run.file("judge/lora-ppo/packet.json"))
+    assert receipt["metadata"]["tasks"] == len(prompts)*2
+    assert packet["method"] == "paired-v3-lora"
+    assert packet["v3"]["policy_episode"] == 32768
+    assert packet["v3"]["comparisons"] == [{"name": "full_pool_lora_vs_sft",
+                                                "left": "full-pool-lora",
+                                                "right": "sft", "primary": True}]
+    assert not run.file("judge/packet.json").exists()
+    inspected = run_local(run.file("judge/lora-ppo/packet.json"), tmp_path/"results.jsonl",
+                          tmp_path/"v3-lora.sqlite")
+    assert inspected["tasks"] == len(prompts)*2 and inspected["http_requests_sent"] == 0
+    monkeypatch.setenv("OPENAI_API_KEY", "OFFLINE_TEST_KEY")
+    sent, results = [], tmp_path/"results.jsonl"
+    run_local(run.file("judge/lora-ppo/packet.json"), results, tmp_path/"v3-lora.sqlite",
+              budget_usd=1, execute=True, transport=fake_http(sent), workers=2)
+    imported = import_lora_judge(c, results)
+    assert imported["metadata"]["valid_judgments"] == len(prompts)*2
+    aggregate_lora(c)
+    summary = read_json(run.file("summaries/lora-ppo-vs-sft.json"))
+    assert summary["comparison"]["win_rate"] == .5
+    assert summary["comparison"]["raw_judgment_tie_fraction"] == 1
+    assert not run.file("summaries/results.json").exists()
+    with pytest.raises(ValueError, match="already frozen"):
+        freeze_lora_selection(c, 16384)
+
+
+def test_lora_evaluation_loader_restores_selected_actor_only(tmp_path, monkeypatch):
+    import torch
+    from prism.v3.distributed_ppo import PROTOCOL
+    c, run, _ = fixture(tmp_path)
+    state = {"protocol": PROTOCOL, "episode": 32768, "contract_hash": "fixture-contract",
+             "world_size": 8, "actor": {"weight": torch.tensor([3.25])}}
+    freeze_lora_fixture(c, run, checkpoint_payload=state)
+
+    class Actor(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor([0.]))
+    monkeypatch.setattr("prism.v3.ppo.load_model", lambda c: object())
+    monkeypatch.setattr("prism.v3.ppo.make_actor", lambda model, settings: Actor())
+    monkeypatch.setattr("prism.v3.ppo.load_tokenizer", lambda c: "fixture-tokenizer")
+    monkeypatch.setattr("prism.v3.ppo_trainer.seed_everything", lambda seed: None)
+    actor, token = load_selected_actor(c)
+    assert float(actor.weight.detach()) == 3.25 and token == "fixture-tokenizer" and not actor.training
 
 
 def test_tie_half_is_distinct_from_position_disagreement(tmp_path):
