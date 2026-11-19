@@ -68,13 +68,52 @@ def freeze_selection(c, episode):
     latest_path = run.file(f"policy/{METHOD}/checkpoints/latest.json")
     latest = read_json(latest_path)
     report_value = read_json(report)
-    world_size = latest.get("world_size")
-    if (latest.get("episode") != episode or latest.get("path") != checkpoint.name
-            or latest.get("sha256") != digest(checkpoint)
-            or report_value.get("completed_episodes") != episode
-            or world_size not in (4, 8)
-            or report_value.get("distributed_world_size") != world_size):
+    checkpoint_sha256 = digest(checkpoint)
+    world_size = report_value.get("distributed_world_size")
+    if (report_value.get("completed_episodes") != episode
+            or world_size not in (4, 8)):
         raise ValueError("LoRA evaluation checkpoint/report identity is not the selected staged stop")
+    latest_is_selected = (
+        latest.get("episode") == episode
+        and latest.get("path") == checkpoint.name
+        and latest.get("sha256") == checkpoint_sha256
+        and latest.get("world_size") == world_size
+        and isinstance(latest.get("contract_hash"), str)
+    )
+    if latest_is_selected:
+        checkpoint_snapshot = latest
+        contract_hash = latest["contract_hash"]
+    else:
+        # A completed PPO run naturally leaves latest.json at its final stop.  A
+        # historical checkpoint remains independently evaluable only when its
+        # embedded distributed-training contract, immutable report and probes
+        # agree, and the current latest pointer belongs to the same run.
+        import torch
+        from .distributed_ppo import PROTOCOL
+
+        state = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        contract_hash = state.get("contract_hash")
+        state_world_size = state.get("world_size")
+        if (state.get("protocol") != PROTOCOL or state.get("episode") != episode
+                or state_world_size != world_size
+                or not isinstance(contract_hash, str)
+                or not isinstance(state.get("actor"), dict) or not state["actor"]
+                or not isinstance(latest.get("episode"), int)
+                or latest["episode"] < episode
+                or latest.get("contract_hash") != contract_hash
+                or latest.get("world_size") != world_size):
+            raise ValueError("Historical LoRA evaluation checkpoint failed its training contract")
+        checkpoint_snapshot = {
+            "protocol": "v3_lora_ppo_historical_checkpoint_snapshot_v1",
+            "episode": episode,
+            "path": checkpoint.name,
+            "sha256": checkpoint_sha256,
+            "contract_hash": contract_hash,
+            "world_size": world_size,
+            "source": "validated_historical_checkpoint",
+            "source_latest_episode": latest["episode"],
+            "source_latest_sha256": digest(latest_path),
+        }
     for name, path in zip(("train_probe", "dev_probe"), probes):
         value = read_json(path)
         if (value.get("episode") != episode or value.get("probe") != name
@@ -82,22 +121,22 @@ def freeze_selection(c, episode):
                 or value.get("shared_probe_sha256") is None):
             raise ValueError("LoRA evaluation probe does not bind the selected checkpoint")
     latest_snapshot = run.file(f"control/lora-ppo-evaluation-latest-{episode:08d}.json")
-    write_json(latest_snapshot, latest)
+    write_json(latest_snapshot, checkpoint_snapshot)
     value = {
         "protocol": "v3_full_pool_lora_blind_evaluation_selection_v2",
         "method": METHOD,
         "episode": episode,
         "checkpoint": f"policy/{METHOD}/checkpoints/{checkpoint.name}",
-        "checkpoint_sha256": digest(checkpoint),
+        "checkpoint_sha256": checkpoint_sha256,
         "report_sha256": digest(report),
         "probe_sha256": {path.stem.rsplit("-", 1)[-1]: digest(path) for path in probes},
         "latest_snapshot": f"control/{latest_snapshot.name}",
         "latest_snapshot_sha256": digest(latest_snapshot),
-        "contract_hash": latest["contract_hash"],
+        "contract_hash": contract_hash,
         "distributed_world_size": world_size,
         "authority": ("user_continued_independent_evaluation_after_32k_review"
                       if episode == DEFAULT_EPISODE else
-                      "user_requested_independent_evaluation_after_64k_completion"),
+                      "user_requested_independent_checkpoint_evaluation_after_ppo_completion"),
         "claim_scope": "prepare independent blind PPO-vs-SFT evaluation; no paid calls",
     }
     target = run.file(names["selection_path"])

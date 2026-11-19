@@ -196,6 +196,40 @@ def test_lora_32k_and_64k_evaluations_use_disjoint_namespaces(tmp_path):
     assert run.file("receipts/lora-ppo-evaluation-selection-00065536.json").is_file()
 
 
+def test_lora_historical_checkpoint_is_bound_by_embedded_training_contract(tmp_path):
+    import torch
+    from prism.v3.distributed_ppo import PROTOCOL
+
+    c, run, _ = fixture(tmp_path)
+    final_state = {"protocol": PROTOCOL, "episode": 65536,
+                   "contract_hash": "fixture-contract", "world_size": 8,
+                   "actor": {"weight": torch.tensor([6.5])}}
+    freeze_lora_fixture(c, run, episode=65536, checkpoint_payload=final_state)
+
+    episode = 16384
+    folder = run.file("policy/full-pool-lora")
+    checkpoint = folder/f"checkpoints/episode-{episode:08d}.pt"
+    torch.save({"protocol": PROTOCOL, "episode": episode,
+                "contract_hash": "fixture-contract", "world_size": 8,
+                "actor": {"weight": torch.tensor([1.6])}}, checkpoint)
+    write_json(folder/f"report-{episode:08d}.json",
+               {"completed_episodes": episode, "distributed_world_size": 8})
+    for name in ("train_probe", "dev_probe"):
+        write_json(folder/f"probes/{episode:08d}-{name}.json",
+                   {"episode": episode, "probe": name,
+                    "checkpoint_sha256": digest(checkpoint),
+                    "shared_probe_sha256": "shared-fixture"})
+
+    selected = freeze_lora_selection(c, episode)
+    snapshot = read_json(run.file(
+        f"control/lora-ppo-evaluation-latest-{episode:08d}.json"))
+    assert selected["episode"] == episode
+    assert selected["checkpoint_sha256"] == digest(checkpoint)
+    assert snapshot["source"] == "validated_historical_checkpoint"
+    assert snapshot["source_latest_episode"] == 65536
+    assert snapshot["contract_hash"] == "fixture-contract"
+
+
 def test_lora_evaluation_loader_restores_selected_actor_only(tmp_path, monkeypatch):
     import torch
     from prism.v3.distributed_ppo import PROTOCOL
