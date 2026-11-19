@@ -89,7 +89,7 @@ def freeze_lora_fixture(c, run, episode=32768, checkpoint_payload=None):
     latest = folder/"checkpoints/latest.json"
     write_json(latest, {"episode": episode, "path": checkpoint.name,
                         "sha256": digest(checkpoint), "contract_hash": "fixture-contract",
-                        "world_size": 8, "diagnostics_due": True})
+                        "world_size": 8, "diagnostics_due": True}, overwrite=latest.exists())
     report = folder/f"report-{episode:08d}.json"
     write_json(report, {"completed_episodes": episode, "distributed_world_size": 8})
     for name in ("train_probe", "dev_probe"):
@@ -171,6 +171,31 @@ def test_lora_checkpoint_selection_and_blind_packet_are_isolated(tmp_path, monke
         freeze_lora_selection(c, 16384)
 
 
+def test_lora_32k_and_64k_evaluations_use_disjoint_namespaces(tmp_path):
+    c, run, prompts = fixture(tmp_path)
+    freeze_lora_fixture(c, run, episode=32768)
+    freeze_lora_fixture(c, run, episode=65536)
+    for shard in range(2):
+        evaluate_generate(c, "sft", shard, 2, generator=fake_generator)
+    merge_evaluation(c, "sft", 2)
+    for episode, method, packet_path in (
+            (32768, "full-pool-lora", "judge/lora-ppo/packet.json"),
+            (65536, "full-pool-lora-00065536", "judge/lora-ppo-00065536/packet.json")):
+        for shard in range(2):
+            evaluate_generate(c, "full-pool-lora", shard, 2, generator=fake_generator,
+                              evaluation_episode=episode)
+        merge_evaluation(c, "full-pool-lora", 2, evaluation_episode=episode)
+        export_lora_judge(c, episode)
+        packet = read_json(run.file(packet_path))
+        assert packet["v3"]["policy_episode"] == episode
+        assert packet["v3"]["comparisons"][0]["left"] == method
+        assert all(task["left"].startswith(method) for task in packet["tasks"])
+    assert len(rows(run.file("evaluation/full-pool-lora/responses.jsonl"))) == len(prompts)
+    assert len(rows(run.file("evaluation/full-pool-lora-00065536/responses.jsonl"))) == len(prompts)
+    assert run.file("receipts/lora-ppo-evaluation-selection.json").is_file()
+    assert run.file("receipts/lora-ppo-evaluation-selection-00065536.json").is_file()
+
+
 def test_lora_evaluation_loader_restores_selected_actor_only(tmp_path, monkeypatch):
     import torch
     from prism.v3.distributed_ppo import PROTOCOL
@@ -212,6 +237,21 @@ def test_lora_ifeval_shards_preserve_global_indices_and_selection(tmp_path, monk
         "evaluation/full-pool-lora/ifeval/shards/part-00000-of-00002.jsonl"))] == [0, 2, 4]
     assert [row["index"] for row in rows(run.file(
         "evaluation/full-pool-lora/ifeval/shards/part-00001-of-00002.jsonl"))] == [1, 3]
+
+    freeze_lora_fixture(c, run, episode=65536)
+
+    def generate_64k(c, prompt, index):
+        row = generate(c, prompt, index)
+        row["method"] = "full-pool-lora-00065536"
+        return row
+
+    for shard in range(2):
+        lora_ifeval.generate(c, shard, 2, "input", "source", "nltk",
+                            generator=generate_64k, episode=65536)
+    assert [row["index"] for row in rows(run.file(
+        "evaluation/full-pool-lora-00065536/ifeval/shards/part-00000-of-00002.jsonl"))] == [0, 2, 4]
+    assert run.file(
+        "receipts/lora-ppo-ifeval-00065536-part-00000-of-00002.json").is_file()
 
 
 def test_tie_half_is_distinct_from_position_disagreement(tmp_path):

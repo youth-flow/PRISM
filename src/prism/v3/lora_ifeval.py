@@ -57,10 +57,12 @@ def generation_seed(c, index):
     return int(c["evaluation"]["seed"] + SEED_OFFSET + index)
 
 
-def _validate_row(c, row, expected, index):
+def _validate_row(c, row, expected, index, episode=32768):
+    from .lora_evaluation import evaluation_method
+    method = evaluation_method(episode)
     tokens = row.get("response_tokens")
     if (row.get("id") != expected["id"] or row.get("index") != index
-            or row.get("method") != METHOD or row.get("messages") != expected["messages"]
+            or row.get("method") != method or row.get("messages") != expected["messages"]
             or row.get("prompt_sha256") != hash_json(expected["messages"])
             or row.get("generation_seed") != generation_seed(c, index)
             or row.get("config_sha256") != config_hash(c)
@@ -74,14 +76,15 @@ def _validate_row(c, row, expected, index):
         raise ValueError("Invalid or reordered full-pool LoRA IFEval response")
 
 
-def _generate_one(c, model, token, record, index):
+def _generate_one(c, model, token, record, index, episode=32768):
     from prism.hf import generate as hf_generate, prompt_ids
+    from .lora_evaluation import evaluation_method
     prompt = prompt_ids(token, record["messages"], PROMPT_LIMIT)
     response = hf_generate(model, token, prompt, CAP, generation_seed(c, index), temperature=0)
     if not response:
         raise ValueError("Empty IFEval response")
     eos = response[-1] == token.eos_token_id
-    return {"id": record["id"], "index": index, "method": METHOD,
+    return {"id": record["id"], "index": index, "method": evaluation_method(episode),
             "messages": record["messages"], "prompt_sha256": hash_json(record["messages"]),
             "generation_seed": generation_seed(c, index),
             "response": token.decode(response, skip_special_tokens=True),
@@ -89,43 +92,49 @@ def _generate_one(c, model, token, record, index):
             "truncated": len(response) >= CAP and not eos, "config_sha256": config_hash(c)}
 
 
-def generate(c, shard_index, shards, ifeval_input, official_source, nltk_data, *, generator=None):
+def generate(c, shard_index, shards, ifeval_input, official_source, nltk_data, *,
+             generator=None, episode=32768):
     """Generate one resumable, globally indexed actor shard."""
     if (type(shards) is not int or not 1 <= shards <= 541 or type(shard_index) is not int
             or not 0 <= shard_index < shards):
         raise ValueError("Invalid LoRA IFEval shard")
     _, prompts, asset_inputs = _benchmark(ifeval_input, official_source, nltk_data)
     run = Run(c)
-    run.require("lora-ppo-evaluation-selection")
-    stage = f"lora-ppo-ifeval-part-{shard_index:05d}-of-{shards:05d}"
+    from .lora_evaluation import evaluation_method, evaluation_names
+    names = evaluation_names(episode)
+    method = evaluation_method(episode)
+    selection_stage = names["selection_stage"]
+    run.require(selection_stage)
+    stage = f"{names['ifeval_stage']}-part-{shard_index:05d}-of-{shards:05d}"
     if run.completed(stage):
         return run.require(stage)
-    target = run.file(f"evaluation/{METHOD}/ifeval/shards/part-{shard_index:05d}-of-{shards:05d}.jsonl")
+    target = run.file(f"evaluation/{method}/ifeval/shards/part-{shard_index:05d}-of-{shards:05d}.jsonl")
     target.parent.mkdir(parents=True, exist_ok=True)
     indices = list(range(shard_index, len(prompts), shards))
     previous = rows(target) if target.exists() else []
     if len(previous) > len(indices):
         raise ValueError("Unexpected LoRA IFEval shard prefix")
     for row, index in zip(previous, indices):
-        _validate_row(c, row, prompts[index], index)
+        _validate_row(c, row, prompts[index], index, episode)
     model = token = None
     if generator is None and len(previous) < len(indices):
         from .lora_evaluation import load_selected_actor
-        model, token = load_selected_actor(c)
+        model, token = load_selected_actor(c, episode)
     try:
         with target.open("a", encoding="utf-8") as stream:
             for index in indices[len(previous):]:
                 row = (generator(c, prompts[index], index) if generator is not None else
-                       _generate_one(c, model, token, prompts[index], index))
-                _validate_row(c, row, prompts[index], index)
+                       _generate_one(c, model, token, prompts[index], index, episode))
+                _validate_row(c, row, prompts[index], index, episode)
                 stream.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
     finally:
         del model, token
     return run.publish(stage, [target],
-                       [run.receipt_path("lora-ppo-evaluation-selection"), *asset_inputs],
-                       {"method": METHOD, "shard_index": shard_index, "shards": shards,
+                       [run.receipt_path(selection_stage), *asset_inputs],
+                       {"method": method, "episode": episode,
+                        "shard_index": shard_index, "shards": shards,
                         "indices": indices, "cap": CAP, "temperature": 0})
 
 
@@ -203,28 +212,32 @@ def _write_rows(path, records):
         path.write_text(text, encoding="utf-8")
 
 
-def merge(c, shards, ifeval_input, official_source, nltk_data, sft_directory):
+def merge(c, shards, ifeval_input, official_source, nltk_data, sft_directory, *,
+          episode=32768):
     """Merge actor shards, fixed-score both actors, and publish a paired report."""
     from prism.scoring_protocol import PROTOCOL, fixed_score
     if type(shards) is not int or not 1 <= shards <= 541:
         raise ValueError("Invalid LoRA IFEval shard count")
     benchmark, prompts, asset_inputs = _benchmark(ifeval_input, official_source, nltk_data)
     run = Run(c)
-    if run.completed("lora-ppo-ifeval"):
-        return run.require("lora-ppo-ifeval")
+    from .lora_evaluation import evaluation_method, evaluation_names
+    names = evaluation_names(episode)
+    method = evaluation_method(episode)
+    if run.completed(names["ifeval_stage"]):
+        return run.require(names["ifeval_stage"])
     run.require("lora-ppo-ifeval-sft")
     combined, dependencies = {}, [run.receipt_path("lora-ppo-ifeval-sft"),
-                                  run.receipt_path("lora-ppo-evaluation-selection"), *asset_inputs]
+                                  run.receipt_path(names["selection_stage"]), *asset_inputs]
     for shard in range(shards):
-        stage = f"lora-ppo-ifeval-part-{shard:05d}-of-{shards:05d}"
+        stage = f"{names['ifeval_stage']}-part-{shard:05d}-of-{shards:05d}"
         run.require(stage)
         dependencies.append(run.receipt_path(stage))
-        path = run.file(f"evaluation/{METHOD}/ifeval/shards/part-{shard:05d}-of-{shards:05d}.jsonl")
+        path = run.file(f"evaluation/{method}/ifeval/shards/part-{shard:05d}-of-{shards:05d}.jsonl")
         block, expected = rows(path), list(range(shard, len(prompts), shards))
         if [row.get("index") for row in block] != expected:
             raise ValueError("Incomplete or reordered LoRA IFEval shard")
         for row, index in zip(block, expected):
-            _validate_row(c, row, prompts[index], index)
+            _validate_row(c, row, prompts[index], index, episode)
             if index in combined:
                 raise ValueError("Overlapping LoRA IFEval shard")
             combined[index] = row
@@ -245,7 +258,7 @@ def merge(c, shards, ifeval_input, official_source, nltk_data, sft_directory):
     sft_flags = np.asarray([row["strict"]["follow_all_instructions"]
                             for row in sft_score["details"]], dtype=float)
     delta = actor_flags-sft_flags
-    rng = np.random.default_rng(np.random.SeedSequence([c["evaluation"]["seed"], 32768, 541]))
+    rng = np.random.default_rng(np.random.SeedSequence([c["evaluation"]["seed"], episode, 541]))
     draws = c["evaluation"].get("bootstrap_samples", 2000)
     boot = delta[rng.integers(len(delta), size=(draws, len(delta)))].mean(axis=1) if draws else None
     paired = {"prompt_level_strict_delta": float(delta.mean()),
@@ -253,19 +266,19 @@ def merge(c, shards, ifeval_input, official_source, nltk_data, sft_directory):
               "ci95": np.quantile(boot, [.025, .975]).tolist() if draws else None,
               "actor_better": int((delta > 0).sum()), "same": int((delta == 0).sum()),
               "actor_worse": int((delta < 0).sum())}
-    response_path = run.file(f"evaluation/{METHOD}/ifeval/responses.jsonl")
-    metrics_path = run.file(f"evaluation/{METHOD}/ifeval/metrics.json")
-    summary_path = run.file("summaries/lora-ppo-32k-ifeval.json")
+    response_path = run.file(f"evaluation/{method}/ifeval/responses.jsonl")
+    metrics_path = run.file(f"evaluation/{method}/ifeval/metrics.json")
+    summary_path = run.file(names["ifeval_summary"])
     _write_rows(response_path, actor_records)
     write_json(metrics_path, {**actor_score, "scoring_protocol": PROTOCOL})
-    selection = read_json(run.file("control/lora-ppo-evaluation-selection.json"))
+    selection = read_json(run.file(names["selection_path"]))
     summary = {"protocol": "v3_full_pool_lora_ifeval_v1", "selection": selection,
                "prompts": 541, "instructions": 834,
                "generation": {"cap": CAP, "temperature": 0, "prompt_limit": PROMPT_LIMIT},
                "actor": actor_score["metrics"], "sft": sft_score["metrics"],
                "paired_prompt_strict": paired, "scoring_protocol": PROTOCOL, "api_calls": 0}
     write_json(summary_path, summary)
-    return run.publish("lora-ppo-ifeval", [response_path, metrics_path, summary_path],
+    return run.publish(names["ifeval_stage"], [response_path, metrics_path, summary_path],
                        dependencies, {"prompts": 541, "instructions": 834,
                                       "actor_prompt_strict": actor_score["prompt_level_strict"],
                                       "sft_prompt_strict": sft_score["prompt_level_strict"], **paired})

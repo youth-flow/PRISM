@@ -60,10 +60,10 @@ def _model_config(c):
         "model": c["model"]["id"], "revision": c["model"]["revision"]}}}
 
 
-def _load_generator(c, method):
-    if method == LORA_METHOD:
+def _load_generator(c, method, lora_episode=None):
+    if lora_episode is not None:
         from .lora_evaluation import load_selected_actor
-        return load_selected_actor(c)
+        return load_selected_actor(c, lora_episode)
     from prism.hf import load_lm, tokenizer
     legacy = _model_config(c)
     token = tokenizer(legacy)
@@ -136,18 +136,27 @@ def _validate_row(c, row, expected, index, method):
         raise ValueError("Generated KL differs from actor/reference log probabilities")
 
 
-def evaluate_generate(c, method, shard_index=0, shards=1, *, generator=None):
+def evaluate_generate(c, method, shard_index=0, shards=1, *, generator=None,
+                      evaluation_episode=None):
     """Generate a disjoint shard. Only incomplete shard prefixes are resumed."""
     if method not in GENERATION_METHODS or type(shards) is not int or shards < 1 or type(shard_index) is not int or not 0 <= shard_index < shards:
         raise ValueError("Invalid evaluation method or shard")
+    lora_episode = None
+    if method == LORA_METHOD:
+        from .lora_evaluation import DEFAULT_EPISODE, evaluation_method, evaluation_names
+        lora_episode = DEFAULT_EPISODE if evaluation_episode is None else evaluation_episode
+        method = evaluation_method(lora_episode)
+        selection_stage = evaluation_names(lora_episode)["selection_stage"]
+    elif evaluation_episode is not None:
+        raise ValueError("Only LoRA evaluation generation accepts an evaluation episode")
     run = Run(c)
     prompts = _prompts(c, run)
     if shards > len(prompts):
         raise ValueError("More evaluation shards than prompts")
     dependencies = [run.receipt_path("data")]
-    if method == LORA_METHOD:
-        run.require("lora-ppo-evaluation-selection")
-        dependencies.append(run.receipt_path("lora-ppo-evaluation-selection"))
+    if lora_episode is not None:
+        run.require(selection_stage)
+        dependencies.append(run.receipt_path(selection_stage))
     elif method != "sft":
         run.require(f"policy-{method}")
         dependencies.append(run.receipt_path(f"policy-{method}"))
@@ -164,7 +173,7 @@ def evaluate_generate(c, method, shard_index=0, shards=1, *, generator=None):
         _validate_row(c, row, prompts[index], index, method)
     model = token = None
     if generator is None and len(previous) < len(indices):
-        model, token = _load_generator(c, method)
+        model, token = _load_generator(c, method, lora_episode)
     try:
         with target.open("a", encoding="utf-8") as stream:
             for index in indices[len(previous):]:
@@ -180,11 +189,16 @@ def evaluate_generate(c, method, shard_index=0, shards=1, *, generator=None):
                        {"method": method, "shard_index": shard_index, "shards": shards, "indices": indices})
 
 
-def merge_evaluation(c, method, shards):
+def merge_evaluation(c, method, shards, *, evaluation_episode=None):
     run = Run(c)
     prompts = _prompts(c, run)
     if method not in GENERATION_METHODS or type(shards) is not int or not 1 <= shards <= len(prompts):
         raise ValueError("Invalid evaluation shard count")
+    if method == LORA_METHOD:
+        from .lora_evaluation import DEFAULT_EPISODE, evaluation_method
+        method = evaluation_method(DEFAULT_EPISODE if evaluation_episode is None else evaluation_episode)
+    elif evaluation_episode is not None:
+        raise ValueError("Only LoRA evaluation merge accepts an evaluation episode")
     stage = f"eval-{method}"
     if run.completed(stage):
         return run.require(stage)

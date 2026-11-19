@@ -45,6 +45,8 @@ def main(argv=None):
     parser.add_argument("--user-lora-ppo-confirmed", action="store_true",
                         help="Bind explicit continuation authority after reviewing the LoRA PPO episode-8192 gate")
     parser.add_argument("--stop-after-episodes", type=int)
+    parser.add_argument("--evaluation-episode", type=int,
+                        help="Namespace LoRA blind evaluation by a completed PPO checkpoint")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--results")
     parser.add_argument("--ifeval-input")
@@ -147,15 +149,16 @@ def main(argv=None):
             value = freeze_selection(c, args.stop_after_episodes)
         elif args.stage == "lora-ppo-judge-export":
             from .lora_evaluation import export_judge
-            value = export_judge(c)
+            value = export_judge(c, 32768 if args.evaluation_episode is None else args.evaluation_episode)
         elif args.stage == "lora-ppo-judge-import":
             if not args.results:
                 parser.error("lora-ppo-judge-import requires --results")
             from .lora_evaluation import import_judge
-            value = import_judge(c, args.results)
+            value = import_judge(c, args.results,
+                                 32768 if args.evaluation_episode is None else args.evaluation_episode)
         elif args.stage == "lora-ppo-aggregate":
             from .lora_evaluation import aggregate
-            value = aggregate(c)
+            value = aggregate(c, 32768 if args.evaluation_episode is None else args.evaluation_episode)
         elif args.stage in ("lora-ppo-ifeval-sft", "lora-ppo-ifeval-generate", "lora-ppo-ifeval-merge"):
             required = (args.ifeval_input, args.ifeval_source, args.nltk_data)
             if any(item is None for item in required):
@@ -168,11 +171,15 @@ def main(argv=None):
             elif args.stage == "lora-ppo-ifeval-generate":
                 if args.shards is None:
                     parser.error("LoRA PPO IFEval generation requires --shards")
-                value = lora_ifeval.generate(c, args.shard_index, args.shards, *required)
+                value = lora_ifeval.generate(c, args.shard_index, args.shards, *required,
+                                             episode=(32768 if args.evaluation_episode is None
+                                                      else args.evaluation_episode))
             else:
                 if args.shards is None or args.sft_ifeval_dir is None:
                     parser.error("LoRA PPO IFEval merge requires --shards and --sft-ifeval-dir")
-                value = lora_ifeval.merge(c, args.shards, *required, args.sft_ifeval_dir)
+                value = lora_ifeval.merge(c, args.shards, *required, args.sft_ifeval_dir,
+                                          episode=(32768 if args.evaluation_episode is None
+                                                   else args.evaluation_episode))
         elif args.stage.startswith("lora-ppo-"):
             if args.stage == "lora-ppo-policy" and args.stop_after_episodes is None:
                 parser.error("lora-ppo-policy requires an explicit --stop-after-episodes checkpoint")
@@ -212,12 +219,15 @@ def main(argv=None):
             if args.method is None:
                 parser.error("evaluate-generate requires --method")
             from .evaluation import evaluate_generate
-            value = evaluate_generate(c, args.method, shard_index=args.shard_index, shards=1 if args.shards is None else args.shards)
+            value = evaluate_generate(c, args.method, shard_index=args.shard_index,
+                                      shards=1 if args.shards is None else args.shards,
+                                      evaluation_episode=args.evaluation_episode)
         elif args.stage == "merge-evaluation":
             if args.method is None:
                 parser.error("merge-evaluation requires --method")
             from .evaluation import merge_evaluation
-            value = merge_evaluation(c, args.method, 1 if args.shards is None else args.shards)
+            value = merge_evaluation(c, args.method, 1 if args.shards is None else args.shards,
+                                     evaluation_episode=args.evaluation_episode)
         elif args.stage == "judge-export":
             from .evaluation import export_judge
             value = export_judge(c)
