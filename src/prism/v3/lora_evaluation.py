@@ -48,14 +48,18 @@ def freeze_selection(c, episode):
                 or value.get("checkpoint_sha256") != digest(checkpoint)
                 or value.get("shared_probe_sha256") is None):
             raise ValueError("LoRA evaluation probe does not bind the selected checkpoint")
+    latest_snapshot = run.file(f"control/lora-ppo-evaluation-latest-{episode:08d}.json")
+    write_json(latest_snapshot, latest)
     value = {
-        "protocol": "v3_full_pool_lora_blind_evaluation_selection_v1",
+        "protocol": "v3_full_pool_lora_blind_evaluation_selection_v2",
         "method": METHOD,
         "episode": episode,
         "checkpoint": f"policy/{METHOD}/checkpoints/{checkpoint.name}",
         "checkpoint_sha256": digest(checkpoint),
         "report_sha256": digest(report),
         "probe_sha256": {path.stem.rsplit("-", 1)[-1]: digest(path) for path in probes},
+        "latest_snapshot": f"control/{latest_snapshot.name}",
+        "latest_snapshot_sha256": digest(latest_snapshot),
         "contract_hash": latest["contract_hash"],
         "distributed_world_size": world_size,
         "authority": "user_continued_independent_evaluation_after_32k_review",
@@ -63,9 +67,9 @@ def freeze_selection(c, episode):
     }
     target = run.file("control/lora-ppo-evaluation-selection.json")
     write_json(target, value)
-    run.publish(SELECTION_STAGE, [target],
+    run.publish(SELECTION_STAGE, [target, latest_snapshot],
                 [run.receipt_path("lora-ppo-admission"), checkpoint, report,
-                 latest_path, *probes],
+                 *probes],
                 {"episode": episode, "checkpoint_sha256": value["checkpoint_sha256"]})
     return value
 
@@ -75,9 +79,18 @@ def _selection(c):
     run.require(SELECTION_STAGE)
     value = read_json(run.file("control/lora-ppo-evaluation-selection.json"))
     checkpoint = run.file(value["checkpoint"])
-    if (value.get("protocol") != "v3_full_pool_lora_blind_evaluation_selection_v1"
+    latest_snapshot = run.file(value.get("latest_snapshot", "__invalid__"))
+    latest = read_json(latest_snapshot)
+    if (value.get("protocol") != "v3_full_pool_lora_blind_evaluation_selection_v2"
             or value.get("method") != METHOD or digest(checkpoint) != value.get("checkpoint_sha256")):
         raise ValueError("Invalid frozen LoRA evaluation selection")
+    if (digest(latest_snapshot) != value.get("latest_snapshot_sha256")
+            or latest.get("episode") != value.get("episode")
+            or latest.get("path") != checkpoint.name
+            or latest.get("sha256") != value.get("checkpoint_sha256")
+            or latest.get("contract_hash") != value.get("contract_hash")
+            or latest.get("world_size") != value.get("distributed_world_size")):
+        raise ValueError("Invalid frozen LoRA evaluation latest-pointer snapshot")
     return run, value, checkpoint
 
 

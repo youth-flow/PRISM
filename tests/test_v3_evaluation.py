@@ -137,6 +137,8 @@ def test_lora_checkpoint_selection_and_blind_packet_are_isolated(tmp_path, monke
     c, run, prompts = fixture(tmp_path)
     selected = freeze_lora_fixture(c, run)
     assert selected["episode"] == 32768 and selected["method"] == "full-pool-lora"
+    write_json(run.file("policy/full-pool-lora/checkpoints/latest.json"),
+               {"episode": 65536, "continued_after_selection": True}, overwrite=True)
     for method in ("sft", "full-pool-lora"):
         for shard in range(2):
             evaluate_generate(c, method, shard, 2, generator=fake_generator)
