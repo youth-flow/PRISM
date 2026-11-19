@@ -51,7 +51,9 @@ def test_plan_validate_and_resource_do_not_create_run(tmp_path, capsys):
                     ["resource", "--for-stage", "linear-ppo-admit"],
                     ["resource", "--for-stage", "linear-ppo-smoke"],
                     ["resource", "--for-stage", "linear-ppo-policy"],
-                    ["resource", "--for-stage", "linear-ppo-audit"], ["status"]):
+                    ["resource", "--for-stage", "linear-ppo-audit"],
+                    ["resource", "--for-stage", "linear-ppo-ifeval-generate"],
+                    ["resource", "--for-stage", "linear-ppo-ifeval-merge"], ["status"]):
         main(command + ["--config", c["_config_path"]])
         assert not Path(c["output"]).exists()
         capsys.readouterr()

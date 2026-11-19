@@ -21,7 +21,7 @@ from prism.v3.lora_evaluation import (aggregate as aggregate_lora,
                                       freeze_selection as freeze_lora_selection,
                                       import_judge as import_lora_judge,
                                       load_selected_actor)
-from prism.v3 import lora_ifeval
+from prism.v3 import linear_ifeval, lora_ifeval
 
 
 @pytest.fixture(autouse=True)
@@ -286,6 +286,37 @@ def test_lora_ifeval_shards_preserve_global_indices_and_selection(tmp_path, monk
         "evaluation/full-pool-lora-00065536/ifeval/shards/part-00000-of-00002.jsonl"))] == [0, 2, 4]
     assert run.file(
         "receipts/lora-ppo-ifeval-00065536-part-00000-of-00002.json").is_file()
+
+
+def test_linear_ifeval_shards_bind_sealed_method_and_global_indices(tmp_path, monkeypatch):
+    c, run, _ = fixture(tmp_path)
+    audit = run.file("policy/empirical/audit.json")
+    write_json(audit, {"stage": "linear-ppo-audit-empirical"})
+    run.publish("linear-ppo-audit-empirical", [audit])
+    prompts = [{"id": f"ifeval:{i}",
+                "messages": [{"role": "user", "content": f"rule {i}"}]}
+               for i in range(5)]
+    monkeypatch.setattr(linear_ifeval, "_benchmark", lambda *args: ({}, prompts, []))
+
+    def generate(c, prompt, index):
+        tokens = [index + 1, 2]
+        return {"id": prompt["id"], "index": index, "method": "empirical",
+                "messages": prompt["messages"],
+                "prompt_sha256": hash_json(prompt["messages"]),
+                "generation_seed": linear_ifeval.generation_seed(c, index),
+                "response": f"answer {index}", "response_tokens": tokens,
+                "response_length": len(tokens), "eos": True, "truncated": False,
+                "config_sha256": config_hash(c)}
+
+    for shard in range(2):
+        linear_ifeval.generate(c, "empirical", shard, 2, "input", "source", "nltk",
+                               generator=generate)
+    assert [row["index"] for row in rows(run.file(
+        "evaluation/empirical/ifeval/shards/part-00000-of-00002.jsonl"))] == [0, 2, 4]
+    assert [row["index"] for row in rows(run.file(
+        "evaluation/empirical/ifeval/shards/part-00001-of-00002.jsonl"))] == [1, 3]
+    assert run.file(
+        "receipts/linear-ppo-ifeval-empirical-part-00000-of-00002.json").is_file()
 
 
 def test_tie_half_is_distinct_from_position_disagreement(tmp_path):

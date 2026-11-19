@@ -93,7 +93,7 @@ if [[ "$stage" == lora-ppo-policy || "$stage" == linear-ppo-policy ]]; then
     || prism_die "Formal linear PPO horizon is exactly 16384 episodes"
 fi
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
-  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score || "$stage" == lora-ppo-ifeval-generate ]] || prism_die "Unexpected V3 array stage"
+  [[ "$stage" == extract-features || "$stage" == evaluate-generate || "$stage" == prepare-shared || "$stage" == lora-reward-score || "$stage" == lora-ppo-ifeval-generate || "$stage" == linear-ppo-ifeval-generate ]] || prism_die "Unexpected V3 array stage"
   cli+=(--shard-index "$SLURM_ARRAY_TASK_ID")
 fi
 if [[ "$distributed_gpus" -gt 1 ]]; then

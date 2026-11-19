@@ -9,7 +9,8 @@ from .config import load_config, plan
 GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "evaluate-generate", "model-smoke",
               "lora-reward-smoke", "lora-reward-train", "lora-reward-score",
               "lora-ppo-normalize", "lora-ppo-smoke", "lora-ppo-policy",
-              "lora-ppo-ifeval-generate", "linear-ppo-smoke", "linear-ppo-policy"}
+              "lora-ppo-ifeval-generate", "linear-ppo-smoke", "linear-ppo-policy",
+              "linear-ppo-ifeval-generate"}
 STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-data", "extract-features",
           "merge-features", "geometry", "geometry-audit", "design", "design-report", "freeze-study", "sample", "reward",
           "prepare-shared", "merge-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
@@ -20,7 +21,8 @@ STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-da
           "lora-ppo-eval-freeze", "lora-ppo-judge-export", "lora-ppo-judge-import",
           "lora-ppo-aggregate", "lora-ppo-ifeval-sft", "lora-ppo-ifeval-generate",
           "lora-ppo-ifeval-merge", "linear-ppo-admit", "linear-ppo-smoke",
-          "linear-ppo-policy", "linear-ppo-audit")
+          "linear-ppo-policy", "linear-ppo-audit", "linear-ppo-ifeval-generate",
+          "linear-ppo-ifeval-merge")
 
 
 def stage_resource(stage):
@@ -197,7 +199,22 @@ def main(argv=None):
                 value = lora_ppo.admit_continuation(c, user_confirmed=args.user_lora_ppo_confirmed)
         elif args.stage.startswith("linear-ppo-"):
             from . import linear_ppo
-            if args.stage == "linear-ppo-admit":
+            if args.stage in ("linear-ppo-ifeval-generate", "linear-ppo-ifeval-merge"):
+                if args.method not in ("empirical", "prism"):
+                    parser.error(f"{args.stage} requires --method empirical or prism")
+                required = (args.ifeval_input, args.ifeval_source, args.nltk_data)
+                if any(item is None for item in required) or args.shards is None:
+                    parser.error("Linear PPO IFEval requires assets and --shards")
+                from . import linear_ifeval
+                if args.stage == "linear-ppo-ifeval-generate":
+                    value = linear_ifeval.generate(
+                        c, args.method, args.shard_index, args.shards, *required)
+                else:
+                    if args.sft_ifeval_dir is None:
+                        parser.error("Linear PPO IFEval merge requires --sft-ifeval-dir")
+                    value = linear_ifeval.merge(
+                        c, args.method, args.shards, *required, args.sft_ifeval_dir)
+            elif args.stage == "linear-ppo-admit":
                 value = linear_ppo.admit(c, user_confirmed=args.user_linear_ppo_confirmed)
             else:
                 if args.method not in ("empirical", "prism"):
