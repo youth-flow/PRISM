@@ -8,7 +8,10 @@ from .config import DATA_ID, DATA_REVISION, MODEL_ID, MODEL_REVISION
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
-CLASSIFICATIONS = {"v5_primary", "historical_linear_diagnostic", "out_of_scope_control"}
+CLASSIFICATIONS = {
+    "v5_primary", "v5_reward_candidate", "historical_linear_diagnostic",
+    "out_of_scope_control",
+}
 
 
 def _finite(value, path="metrics"):
@@ -47,8 +50,18 @@ def _validate_run(entry, kind):
     if entry.get("classification") not in CLASSIFICATIONS:
         raise ValueError(f"Invalid classification for {entry['id']}")
     if kind == "reward" and entry.get("classification") == "v5_primary":
-        if entry.get("architecture") != "frozen_linear" or entry.get("preference_pairs") != 14000:
+        if (entry.get("architecture") != "frozen_linear"
+                or entry.get("preference_pairs") != 14000
+                or entry.get("method") not in ("empirical", "prism")
+                or entry.get("l2") != 0.1):
             raise ValueError("V5 primary Reward must be the audited 14k frozen linear head")
+    if kind == "reward" and entry.get("classification") == "v5_reward_candidate":
+        if (entry.get("architecture") != "frozen_linear"
+                or entry.get("preference_pairs") != 14000
+                or entry.get("method") not in ("empirical", "prism")
+                or entry.get("l2") not in (0.001, 0.01)
+                or entry.get("selected_by_development_nll") is not False):
+            raise ValueError("V5 Reward candidates must be audited non-selected 14k L2 heads")
     if kind == "ppo" and entry.get("classification") == "v5_primary":
         if (entry.get("reward_architecture") != "frozen_linear"
                 or entry.get("episodes") != 16384

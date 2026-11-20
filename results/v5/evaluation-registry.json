@@ -8,10 +8,10 @@
     "preference_data": "Anthropic/hh-rlhf",
     "preference_data_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
     "included": "completed Reward and PPO evaluations using this exact SFT revision and HH preference pool",
-    "excluded": "V1/V2 generated-candidate studies and incomplete or unverified runs"
+    "excluded": "V1/V2 generated-candidate studies, V4 OLMo-3-7B HH learning curve, and incomplete or unverified runs"
   },
   "counts": {
-    "reward_runs": 10,
+    "reward_runs": 14,
     "ppo_runs": 5
   },
   "reward_runs": [
@@ -32,7 +32,7 @@
         "development_bt_nll": 0.6768462613636004
       },
       "evidence": [
-        {"path": "local/v3-execution/full-pool-reward/diagnostics/full-pool-reward/summary.json", "sha256": "a355d2be390c8200a5fef9fd4276d24a3deb542b9e389b868ea678953d82b2a0"}
+        {"path": "local/v3-execution/post-N-evidence/reward/selection.json", "sha256": "18c3f3693ea9e14696254b596de0b73e58769c2843336828eb25275628a9dcfe"}
       ]
     },
     {
@@ -52,7 +52,95 @@
         "development_bt_nll": 0.6714467664480286
       },
       "evidence": [
-        {"path": "local/v3-execution/full-pool-reward/diagnostics/full-pool-reward/summary.json", "sha256": "a355d2be390c8200a5fef9fd4276d24a3deb542b9e389b868ea678953d82b2a0"}
+        {"path": "local/v3-execution/post-N-evidence/reward/selection.json", "sha256": "18c3f3693ea9e14696254b596de0b73e58769c2843336828eb25275628a9dcfe"}
+      ]
+    },
+    {
+      "id": "reward-linear-empirical-n14000-l2-0.001",
+      "status": "completed",
+      "classification": "v5_reward_candidate",
+      "method": "empirical",
+      "architecture": "frozen_linear",
+      "preference_pairs": 14000,
+      "design_lambda": 0.001,
+      "l2": 0.001,
+      "selected_by_development_nll": false,
+      "metrics": {
+        "training_accuracy": 0.704,
+        "training_bt_nll": 0.5593419711692829,
+        "development_pairs": 2048,
+        "development_accuracy": 0.5673828125,
+        "development_bt_nll": 0.7689260997350744,
+        "weight_norm": 3.3437799357136453
+      },
+      "evidence": [
+        {"path": "local/v3-execution/post-N-evidence/reward/selection.json", "sha256": "18c3f3693ea9e14696254b596de0b73e58769c2843336828eb25275628a9dcfe"}
+      ]
+    },
+    {
+      "id": "reward-linear-prism-n14000-l2-0.001",
+      "status": "completed",
+      "classification": "v5_reward_candidate",
+      "method": "prism",
+      "architecture": "frozen_linear",
+      "preference_pairs": 14000,
+      "design_lambda": 0.001,
+      "l2": 0.001,
+      "selected_by_development_nll": false,
+      "metrics": {
+        "training_accuracy": 0.7272857142857143,
+        "training_bt_nll": 0.538911301229012,
+        "development_pairs": 2048,
+        "development_accuracy": 0.5810546875,
+        "development_bt_nll": 0.6992496557022527,
+        "weight_norm": 1.7708294297404226
+      },
+      "evidence": [
+        {"path": "local/v3-execution/post-N-evidence/reward/selection.json", "sha256": "18c3f3693ea9e14696254b596de0b73e58769c2843336828eb25275628a9dcfe"}
+      ]
+    },
+    {
+      "id": "reward-linear-empirical-n14000-l2-0.01",
+      "status": "completed",
+      "classification": "v5_reward_candidate",
+      "method": "empirical",
+      "architecture": "frozen_linear",
+      "preference_pairs": 14000,
+      "design_lambda": 0.001,
+      "l2": 0.01,
+      "selected_by_development_nll": false,
+      "metrics": {
+        "training_accuracy": 0.6948571428571428,
+        "training_bt_nll": 0.5742152719613505,
+        "development_pairs": 2048,
+        "development_accuracy": 0.57421875,
+        "development_bt_nll": 0.7118354126812916,
+        "weight_norm": 1.7463128842151305
+      },
+      "evidence": [
+        {"path": "local/v3-execution/post-N-evidence/reward/selection.json", "sha256": "18c3f3693ea9e14696254b596de0b73e58769c2843336828eb25275628a9dcfe"}
+      ]
+    },
+    {
+      "id": "reward-linear-prism-n14000-l2-0.01",
+      "status": "completed",
+      "classification": "v5_reward_candidate",
+      "method": "prism",
+      "architecture": "frozen_linear",
+      "preference_pairs": 14000,
+      "design_lambda": 0.001,
+      "l2": 0.01,
+      "selected_by_development_nll": false,
+      "metrics": {
+        "training_accuracy": 0.7247142857142858,
+        "training_bt_nll": 0.5418059488585945,
+        "development_pairs": 2048,
+        "development_accuracy": 0.58203125,
+        "development_bt_nll": 0.6880422639599899,
+        "weight_norm": 1.3801303248332852
+      },
+      "evidence": [
+        {"path": "local/v3-execution/post-N-evidence/reward/selection.json", "sha256": "18c3f3693ea9e14696254b596de0b73e58769c2843336828eb25275628a9dcfe"}
       ]
     },
     {

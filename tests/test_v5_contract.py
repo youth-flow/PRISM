@@ -53,7 +53,7 @@ def test_v5_rejects_protocol_drift(section, key, value):
 
 def test_registry_contains_primary_and_separated_controls():
     value = load_registry(REGISTRY)
-    assert value["counts"] == {"reward_runs": 10, "ppo_runs": 5}
+    assert value["counts"] == {"reward_runs": 14, "ppo_runs": 5}
     primary_rewards = [run for run in value["reward_runs"]
                        if run["classification"] == "v5_primary"]
     primary_policies = [run for run in value["ppo_runs"]
@@ -63,6 +63,13 @@ def test_registry_contains_primary_and_separated_controls():
     assert all(run["architecture"] == "frozen_linear" for run in primary_rewards)
     assert all(run["reward_architecture"] == "frozen_linear" for run in primary_policies)
     assert all(run["episodes"] == 16384 for run in primary_policies)
+    candidates = [run for run in value["reward_runs"]
+                  if run["classification"] == "v5_reward_candidate"]
+    assert len(candidates) == 4
+    assert {(run["method"], run["l2"]) for run in candidates} == {
+        ("empirical", 0.001), ("prism", 0.001),
+        ("empirical", 0.01), ("prism", 0.01),
+    }
     assert any(run["architecture"] == "lora_plus_linear"
                and run["classification"] == "out_of_scope_control"
                for run in value["reward_runs"])
@@ -83,6 +90,9 @@ def test_registry_seals_key_reported_results():
     assert empirical["generation"]["sequence_kl_mc"] == pytest.approx(12.773201878488063)
     assert prism["ifeval"]["actor_prompt_strict"] == pytest.approx(0.4048059149722736)
     assert empirical["ifeval"]["actor_prompt_strict"] == pytest.approx(0.4195933456561922)
+    rewards = {run["id"]: run for run in value["reward_runs"]}
+    assert rewards["reward-linear-prism-n14000-l2-0.01"]["metrics"][
+        "development_bt_nll"] == pytest.approx(0.6880422639599899)
 
 
 def test_registry_rejects_promoting_lora_control_to_primary():
@@ -97,7 +107,7 @@ def test_cli_validates_and_rejects_lora_execution(capsys):
     cli.main(["validate", "--config", str(CONFIG)])
     output = json.loads(capsys.readouterr().out)
     assert output["structural_validation"] == "passed"
-    assert output["registry"]["counts"]["ppo_runs"] == 5
+    assert output["registry"]["counts"] == {"reward_runs": 14, "ppo_runs": 5}
     with pytest.raises(SystemExit, match="rejects non-linear"):
         cli.main(["lora-ppo-policy", "--config", str(CONFIG)])
 

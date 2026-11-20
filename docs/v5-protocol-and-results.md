@@ -26,17 +26,34 @@ V5 将已经验证过的研究口径收敛为一条可复现实验主线，并�
 单独封存在 `v5.preference_budget=14000` 和 `v5.design_lambda=0.001`，正式执行时仍需
 生成 selection/admission receipt。
 
-## V5 主线 Reward 结果
+## V5 Reward 对象与结果
 
-| 方法 | 训练准确率 | 开发准确率 | 开发 BT NLL |
-|---|---:|---:|---:|
-| Empirical 14k | 66.5357% | 57.0801% | 0.676846 |
-| PRISM 14k | 70.7714% | 57.9590% | 0.671447 |
+严格按同一个 1B SFT revision 和原始 HH preference pool，已完成四个 Reward 实验族、
+共十四个评价点：14k Empirical/PRISM 各三个 L2 候选，全池冻结线性三个 L2，以及
+全池 LoRA 连续训练的四个规定里程碑和一个开发 NLL 选中点。
 
-PRISM 的训练集拟合明显更高，但共同开发集只提高 0.879 个百分点。因此 V5 不把 Reward
-开发准确率单独作为下游成败判断，而是同时报告最终策略的 Luna、IFEval 和 KL。
+### 14k Empirical/PRISM 的全部 L2 候选
+
+| 方法 | L2 | 训练准确率 | 开发准确率 | 开发 BT NLL |
+|---|---:|---:|---:|---:|
+| Empirical 14k | 0.001 | 70.4000% | 56.7383% | 0.768926 |
+| PRISM 14k | 0.001 | 72.7286% | 58.1055% | 0.699250 |
+| Empirical 14k | 0.01 | 69.4857% | 57.4219% | 0.711835 |
+| PRISM 14k | 0.01 | 72.4714% | 58.2031% | 0.688042 |
+| **Empirical 14k（选中）** | **0.1** | **66.5357%** | **57.0801%** | **0.676846** |
+| **PRISM 14k（选中）** | **0.1** | **70.7714%** | **57.9590%** | **0.671447** |
+
+公共选择规则是两个方法开发 BT NLL 的等权均值，最终共同选择 L2=0.1。PRISM 的训练集
+拟合明显更高，但选中头的共同开发集只提高 0.879 个百分点。因此 V5 不把 Reward 开发
+准确率单独作为下游成败判断，而是同时报告最终策略的 Luna、IFEval 和 KL。
 
 ## V5 主线 PPO 结果（16,384 episodes）
+
+同源 1B/HH 下只有三次独立 PPO 训练：14k Empirical 线性 Reward、14k PRISM 线性
+Reward、全池 LoRA Reward。前两次各只对最终 16k checkpoint 做完整外部评价；LoRA PPO
+对 16k、32k、65k 三个 checkpoint 做了完整外部评价。因此是三次 PPO 训练、五个带
+Winrate/KL/IFEval 的 Policy evaluation 对象。2k/8k 等中间闸门只有内部 Reward/KL/
+critic probe，不冒充完整外部 Policy evaluation。
 
 | 策略 | Luna 对 SFT | IFEval prompt strict | 相对 SFT 差值 | sequence KL |
 |---|---:|---:|---:|---:|
@@ -82,6 +99,13 @@ Empirical，且外部生成 KL 更低；但两者都降低了 IFEval，尤其 PR
 
 这些结果说明“Reward 开发准确率更高”不自动意味着 Luna 胜率更高；最终仍需以策略评价
 为准。V5 选择线性 Reward 是研究对象约束，而不是声称线性头表征更强。
+
+### 为什么不纳入 V4 的 Empirical 多预算曲线
+
+V4 确实在 HH 上保存了 10k/50k/100k/159,682 四个 Empirical 线性 Reward checkpoint，
+但其冻结模型是 `allenai/Olmo-3-7B-Instruct-SFT` revision `e1452fc...e549`，不是 V5
+固定的 1B SFT。它属于另一模型尺度的实验，不能混入“同一 1B SFT + HH”的 V5 registry。
+V1/V2 则使用生成候选与模型标注协议，也不是原始 HH chosen/rejected Reward 训练对象。
 
 ## 运行和结果入口
 
