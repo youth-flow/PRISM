@@ -22,7 +22,13 @@ DESIGN_LAMBDA = 0.001
 REWARD_L2 = 0.1
 EIGHT_K_BUDGET = 8000
 EIGHT_K_PROFILE = "budget_n8000"
+TEN_K_BUDGET = 10000
+TEN_K_PROFILE = "budget_n10000"
 DEVELOPMENT_SELECTED_L2 = "shared_development_mean_bt_nll"
+BUDGET_STUDY_PROFILES = {
+    EIGHT_K_PROFILE: EIGHT_K_BUDGET,
+    TEN_K_PROFILE: TEN_K_BUDGET,
+}
 METHODS = ["empirical", "prism"]
 EVALUATIONS = ["reward_development", "luna_ab_ba", "ifeval", "sequence_kl"]
 
@@ -51,8 +57,9 @@ def validate_v5(c):
     profile = contract.get("study_variant", "primary_n14000")
     if profile == "primary_n14000":
         budget, reward_l2 = PREFERENCE_BUDGET, REWARD_L2
-    elif profile == EIGHT_K_PROFILE:
-        budget, reward_l2 = EIGHT_K_BUDGET, DEVELOPMENT_SELECTED_L2
+    elif profile in BUDGET_STUDY_PROFILES:
+        budget = BUDGET_STUDY_PROFILES[profile]
+        reward_l2 = DEVELOPMENT_SELECTED_L2
     else:
         raise ValueError(f"Unknown V5 study variant: {profile}")
     _require(contract, {

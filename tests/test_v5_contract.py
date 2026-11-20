@@ -14,6 +14,7 @@ from prism.v5.registry import load_registry, validate_registry
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs" / "experiment.v5.yaml"
 CONFIG_8K = ROOT / "configs" / "experiment.v5.8k.yaml"
+CONFIG_10K = ROOT / "configs" / "experiment.v5.10k.yaml"
 REGISTRY = ROOT / "results" / "v5" / "evaluation-registry.json"
 
 
@@ -47,6 +48,25 @@ def test_v5_8k_is_an_isolated_nested_budget_with_unchanged_ppo_recipe():
     assert primary["study"] == budget8["study"]
     recipe = _recipe(budget8)
     assert recipe["preference_budget"] == 8000
+    assert recipe["formal_horizon"] == 16384
+    assert recipe["scheduler_total_episodes"] == 65536
+    assert recipe["reward_l2"] == "shared_development_mean_bt_nll"
+
+
+def test_v5_10k_is_an_isolated_budget_with_unchanged_ppo_recipe():
+    primary, budget10 = load_config(CONFIG), load_config(CONFIG_10K)
+    value = plan(budget10)
+    assert value["reward"] == {
+        "type": "frozen_sft_eos2048_bias_free_linear_bt",
+        "preference_budget": 10000,
+        "design_lambda": pytest.approx(0.001),
+        "l2": "shared_development_mean_bt_nll",
+    }
+    assert primary["ppo"] == budget10["ppo"]
+    assert primary["study"] == budget10["study"]
+    recipe = _recipe(budget10)
+    assert recipe["protocol"] == "v5_frozen_linear_reward_n10000_distributed_ppo_v1"
+    assert recipe["preference_budget"] == 10000
     assert recipe["formal_horizon"] == 16384
     assert recipe["scheduler_total_episodes"] == 65536
     assert recipe["reward_l2"] == "shared_development_mean_bt_nll"
@@ -181,3 +201,14 @@ def test_v5_8k_execution_guard_accepts_only_its_frozen_budget(monkeypatch):
     with pytest.raises(SystemExit, match="requires --budget 8000"):
         cli.main(["freeze-study", "--budget", "14000", "--design-lambda", "0.001",
                   "--config", str(CONFIG_8K)])
+
+
+def test_v5_10k_execution_guard_accepts_only_its_frozen_budget(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "v3_main", lambda argv: calls.append(argv))
+    cli.main(["freeze-study", "--budget", "10000", "--design-lambda", "0.001",
+              "--config", str(CONFIG_10K)])
+    assert calls and "10000" in calls[0]
+    with pytest.raises(SystemExit, match="requires --budget 10000"):
+        cli.main(["freeze-study", "--budget", "8000", "--design-lambda", "0.001",
+                  "--config", str(CONFIG_10K)])

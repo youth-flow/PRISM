@@ -34,11 +34,13 @@ def _materialize(source, target):
 
 
 def import_upstream(c, upstream_config):
-    """Import only label-independent assets; Reward and all 8k outputs remain fresh."""
+    """Import only label-independent assets; all budget-study outputs remain fresh."""
     contract = c.get("v5", {})
-    if (contract.get("study_variant") != "budget_n8000"
-            or contract.get("preference_budget") != 8000):
-        raise ValueError("Upstream import is restricted to the isolated V5 8k study")
+    budget = contract.get("preference_budget")
+    if (contract.get("study_variant") not in {"budget_n8000", "budget_n10000"}
+            or budget not in {8000, 10000}
+            or contract.get("study_variant") != f"budget_n{budget}"):
+        raise ValueError("Upstream import is restricted to an isolated V5 budget study")
     upstream = load_config(upstream_config)
     mismatches = [name for name in COMPATIBLE_SECTIONS
                   if c["_contract"][name] != upstream["_contract"][name]]

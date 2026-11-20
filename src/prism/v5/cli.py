@@ -74,7 +74,7 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
         parser = argparse.ArgumentParser(
-            description="V5: OLMo-1B + HH + 14k frozen-linear Reward + 16k PPO")
+            description="V5: OLMo-1B + HH + frozen-linear Reward budget studies + 16k PPO")
         parser.add_argument("stage", choices=sorted(LOCAL_STAGES | EXECUTION_STAGES))
         parser.print_help()
         return

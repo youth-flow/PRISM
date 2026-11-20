@@ -36,7 +36,7 @@ RECIPE = {
 
 
 def _recipe(c):
-    """Return the sealed 14k recipe or the explicitly isolated V5 8k variant."""
+    """Return the sealed 14k recipe or an explicitly isolated V5 budget variant."""
     contract = c.get("v5")
     if not isinstance(contract, dict):
         return dict(RECIPE)
@@ -45,12 +45,14 @@ def _recipe(c):
     reward_l2 = contract.get("reward_l2")
     if budget == 14000 and reward_l2 == .1:
         return dict(RECIPE)
-    if (contract.get("study_variant") == "budget_n8000" and budget == 8000
+    if (contract.get("study_variant") in {"budget_n8000", "budget_n10000"}
+            and budget in {8000, 10000}
+            and contract.get("study_variant") == f"budget_n{budget}"
             and math.isclose(design_lambda, .001, rel_tol=0., abs_tol=1e-15)
             and reward_l2 == "shared_development_mean_bt_nll"):
         return {**RECIPE,
-                "protocol": "v5_frozen_linear_reward_n8000_distributed_ppo_v1",
-                "preference_budget": 8000,
+                "protocol": f"v5_frozen_linear_reward_n{budget}_distributed_ppo_v1",
+                "preference_budget": budget,
                 "reward_l2": reward_l2}
     raise ValueError("Linear PPO rejects an unsealed Reward-budget variant")
 
