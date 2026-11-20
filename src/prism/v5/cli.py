@@ -21,6 +21,7 @@ EXECUTION_STAGES = {
     "linear-ppo-smoke", "linear-ppo-policy", "linear-ppo-audit",
     "evaluate-generate", "merge-evaluation", "judge-export", "judge-import",
     "aggregate", "linear-ppo-ifeval-generate", "linear-ppo-ifeval-merge", "audit",
+    "lora-ppo-ifeval-sft",
 }
 
 

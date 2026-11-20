@@ -9,8 +9,8 @@ from .config import DATA_ID, DATA_REVISION, MODEL_ID, MODEL_REVISION
 
 SHA256 = re.compile(r"[0-9a-f]{64}")
 CLASSIFICATIONS = {
-    "v5_primary", "v5_reward_candidate", "historical_linear_diagnostic",
-    "out_of_scope_control",
+    "v5_primary", "v5_reward_candidate", "v5_budget_study",
+    "v5_budget_candidate", "historical_linear_diagnostic", "out_of_scope_control",
 }
 
 
@@ -62,11 +62,31 @@ def _validate_run(entry, kind):
                 or entry.get("l2") not in (0.001, 0.01)
                 or entry.get("selected_by_development_nll") is not False):
             raise ValueError("V5 Reward candidates must be audited non-selected 14k L2 heads")
+    if kind == "reward" and entry.get("classification") == "v5_budget_study":
+        if (entry.get("architecture") != "frozen_linear"
+                or entry.get("preference_pairs") != 8000
+                or entry.get("method") not in ("empirical", "prism")
+                or entry.get("l2") != 0.1
+                or entry.get("selected_by_development_nll") is not True):
+            raise ValueError("V5 8k Reward study must use its audited selected L2=0.1 heads")
+    if kind == "reward" and entry.get("classification") == "v5_budget_candidate":
+        if (entry.get("architecture") != "frozen_linear"
+                or entry.get("preference_pairs") != 8000
+                or entry.get("method") not in ("empirical", "prism")
+                or entry.get("l2") not in (0.001, 0.01)
+                or entry.get("selected_by_development_nll") is not False):
+            raise ValueError("V5 8k Reward candidates must be audited non-selected L2 heads")
     if kind == "ppo" and entry.get("classification") == "v5_primary":
         if (entry.get("reward_architecture") != "frozen_linear"
                 or entry.get("episodes") != 16384
                 or entry.get("preference_pairs") != 14000):
             raise ValueError("V5 primary PPO must be 14k frozen-linear/16k-episode")
+    if kind == "ppo" and entry.get("classification") == "v5_budget_study":
+        if (entry.get("reward_architecture") != "frozen_linear"
+                or entry.get("episodes") != 16384
+                or entry.get("preference_pairs") != 8000
+                or entry.get("method") not in ("empirical", "prism")):
+            raise ValueError("V5 8k PPO study must be frozen-linear/16k-episode")
     _finite(entry.get("metrics"), f"{entry['id']}.metrics")
     _validate_evidence(entry)
 
@@ -119,5 +139,9 @@ def summary(value):
                                if run["classification"] == "v5_primary"],
         "primary_ppo_ids": [run["id"] for run in value["ppo_runs"]
                             if run["classification"] == "v5_primary"],
+        "budget_study_reward_ids": [run["id"] for run in value["reward_runs"]
+                                    if run["classification"] == "v5_budget_study"],
+        "budget_study_ppo_ids": [run["id"] for run in value["ppo_runs"]
+                                 if run["classification"] == "v5_budget_study"],
         "historical_controls_are_not_v5_primary": True,
     }

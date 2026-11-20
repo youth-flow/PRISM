@@ -11,8 +11,8 @@
     "excluded": "V1/V2 generated-candidate studies, V4 OLMo-3-7B HH learning curve, and incomplete or unverified runs"
   },
   "counts": {
-    "reward_runs": 14,
-    "ppo_runs": 5
+    "reward_runs": 20,
+    "ppo_runs": 7
   },
   "reward_runs": [
     {
@@ -141,6 +141,144 @@
       },
       "evidence": [
         {"path": "local/v3-execution/post-N-evidence/reward/selection.json", "sha256": "18c3f3693ea9e14696254b596de0b73e58769c2843336828eb25275628a9dcfe"}
+      ]
+    },
+    {
+      "id": "reward-linear-empirical-n8000-l2-0.001",
+      "status": "completed",
+      "classification": "v5_budget_candidate",
+      "method": "empirical",
+      "architecture": "frozen_linear",
+      "preference_pairs": 8000,
+      "design_lambda": 0.001,
+      "l2": 0.001,
+      "selected_by_development_nll": false,
+      "metrics": {
+        "training_accuracy": 0.750875,
+        "training_bt_nll": 0.5005618151396034,
+        "development_pairs": 2048,
+        "development_accuracy": 0.54248046875,
+        "development_bt_nll": 0.9318569972577441,
+        "development_brier": 0.3029365062794944,
+        "weight_norm": 5.016541553691478
+      },
+      "evidence": [
+        {"path": "local/v5-execution/8k-final/reward/selection.json", "sha256": "ee89030196e35cae3110707b6282d6bfdec3e48e0b3ba86d911333d29971bf15"}
+      ]
+    },
+    {
+      "id": "reward-linear-prism-n8000-l2-0.001",
+      "status": "completed",
+      "classification": "v5_budget_candidate",
+      "method": "prism",
+      "architecture": "frozen_linear",
+      "preference_pairs": 8000,
+      "design_lambda": 0.001,
+      "l2": 0.001,
+      "selected_by_development_nll": false,
+      "metrics": {
+        "training_accuracy": 0.77825,
+        "training_bt_nll": 0.46334721002388435,
+        "development_pairs": 2048,
+        "development_accuracy": 0.57275390625,
+        "development_bt_nll": 0.7551466909483862,
+        "development_brier": 0.2662727810520338,
+        "weight_norm": 2.7294047411558076
+      },
+      "evidence": [
+        {"path": "local/v5-execution/8k-final/reward/selection.json", "sha256": "ee89030196e35cae3110707b6282d6bfdec3e48e0b3ba86d911333d29971bf15"}
+      ]
+    },
+    {
+      "id": "reward-linear-empirical-n8000-l2-0.01",
+      "status": "completed",
+      "classification": "v5_budget_candidate",
+      "method": "empirical",
+      "architecture": "frozen_linear",
+      "preference_pairs": 8000,
+      "design_lambda": 0.001,
+      "l2": 0.01,
+      "selected_by_development_nll": false,
+      "metrics": {
+        "training_accuracy": 0.731875,
+        "training_bt_nll": 0.5336675791969387,
+        "development_pairs": 2048,
+        "development_accuracy": 0.55078125,
+        "development_bt_nll": 0.7722960535453911,
+        "development_brier": 0.2718531680769646,
+        "weight_norm": 2.207995428130588
+      },
+      "evidence": [
+        {"path": "local/v5-execution/8k-final/reward/selection.json", "sha256": "ee89030196e35cae3110707b6282d6bfdec3e48e0b3ba86d911333d29971bf15"}
+      ]
+    },
+    {
+      "id": "reward-linear-prism-n8000-l2-0.01",
+      "status": "completed",
+      "classification": "v5_budget_candidate",
+      "method": "prism",
+      "architecture": "frozen_linear",
+      "preference_pairs": 8000,
+      "design_lambda": 0.001,
+      "l2": 0.01,
+      "selected_by_development_nll": false,
+      "metrics": {
+        "training_accuracy": 0.77375,
+        "training_bt_nll": 0.4716013130316156,
+        "development_pairs": 2048,
+        "development_accuracy": 0.57421875,
+        "development_bt_nll": 0.720717185996747,
+        "development_brier": 0.25649639938436397,
+        "weight_norm": 1.9142716891367653
+      },
+      "evidence": [
+        {"path": "local/v5-execution/8k-final/reward/selection.json", "sha256": "ee89030196e35cae3110707b6282d6bfdec3e48e0b3ba86d911333d29971bf15"}
+      ]
+    },
+    {
+      "id": "reward-linear-empirical-n8000",
+      "status": "completed",
+      "classification": "v5_budget_study",
+      "method": "empirical",
+      "architecture": "frozen_linear",
+      "preference_pairs": 8000,
+      "design_lambda": 0.001,
+      "l2": 0.1,
+      "selected_by_development_nll": true,
+      "metrics": {
+        "training_accuracy": 0.691625,
+        "training_bt_nll": 0.5915376890350207,
+        "development_pairs": 2048,
+        "development_accuracy": 0.56640625,
+        "development_bt_nll": 0.6939747202181669,
+        "development_brier": 0.24851989122582388,
+        "weight_norm": 0.6684552746241522
+      },
+      "evidence": [
+        {"path": "local/v5-execution/8k-final/reward/selection.json", "sha256": "ee89030196e35cae3110707b6282d6bfdec3e48e0b3ba86d911333d29971bf15"}
+      ]
+    },
+    {
+      "id": "reward-linear-prism-n8000",
+      "status": "completed",
+      "classification": "v5_budget_study",
+      "method": "prism",
+      "architecture": "frozen_linear",
+      "preference_pairs": 8000,
+      "design_lambda": 0.001,
+      "l2": 0.1,
+      "selected_by_development_nll": true,
+      "metrics": {
+        "training_accuracy": 0.750625,
+        "training_bt_nll": 0.5191785939076883,
+        "development_pairs": 2048,
+        "development_accuracy": 0.57275390625,
+        "development_bt_nll": 0.6832944082238599,
+        "development_brier": 0.2439598504724513,
+        "weight_norm": 0.7901683568392229
+      },
+      "evidence": [
+        {"path": "local/v5-execution/8k-final/reward/selection.json", "sha256": "ee89030196e35cae3110707b6282d6bfdec3e48e0b3ba86d911333d29971bf15"}
       ]
     },
     {
@@ -303,6 +441,51 @@
         {"path": "local/v3-execution/lora-ppo/linear-final/hh-results.json", "sha256": "eb7a7e79f5c89a3055155aed70fdc371f19d1c87af2a73c790ece4030dc04cce"},
         {"path": "local/v3-execution/lora-ppo/linear-final/prism-ifeval.json", "sha256": "3134d3e31c60b391a3807c831271a120123e56cccf3604282ea855677e15ca6d"},
         {"path": "local/v3-execution/lora-ppo/linear-final/prism-generation.json", "sha256": "101791bc781825511ef74c656d8198281c33de0cd434a14cd99dea617c4eb382"}
+      ]
+    },
+    {
+      "id": "ppo-linear-empirical-n8000-e16384",
+      "status": "completed",
+      "classification": "v5_budget_study",
+      "method": "empirical",
+      "reward_architecture": "frozen_linear",
+      "preference_pairs": 8000,
+      "episodes": 16384,
+      "scheduler_total_episodes": 65536,
+      "metrics": {
+        "luna_vs_sft": {"win_rate": 0.67, "ci95": [0.6305, 0.7085125], "prompts": 500, "helpful_win_rate": 0.6823770491803278, "harmless_win_rate": 0.6361940298507462},
+        "ifeval": {"prompts": 541, "instructions": 834, "sft_prompt_strict": 0.45471349353049906, "actor_prompt_strict": 0.4011090573012939, "actor_instruction_strict": 0.5299760191846523, "paired_prompt_delta": -0.053604436229205174, "paired_delta_ci95": [-0.09242144177449169, -0.014787430683918669]},
+        "generation": {"prompts": 500, "sequence_kl_mc": 12.825166187167168, "mean_response_tokens": 169.97, "eos_rate": 0.996, "truncation_rate": 0.004},
+        "internal_probe": {"paired_reward_delta": 1.8236820016294313, "paired_rlhf_objective_delta": 1.1571093728363575, "sequence_kl_mc": 13.331452575861476, "mean_response_tokens": 174.21875, "critic_explained_variance": 0.5673994528750472}
+      },
+      "evidence": [
+        {"path": "local/v5-execution/8k-final/summaries/results.json", "sha256": "cb1a97054b101ee723965256d817c5f791bef3471119dfb5bbfc8893df639a55"},
+        {"path": "local/v5-execution/8k-final/summaries/linear-ppo-empirical-ifeval.json", "sha256": "6036ab2123cf81e93d507072a969c38f968282e2c6bd7ef65a2fe9b57cf1e92d"},
+        {"path": "local/v5-execution/8k-final/evaluation/empirical/generation.metrics.json", "sha256": "c098730b84562997068b60e179d2a6d697e35267224335e747d0b6cf214b0bfd"},
+        {"path": "local/v5-execution/8k-final/policy/empirical/probes/00016384-dev_probe.json", "sha256": "101a6b89b9cd201eb9872b5ce8de358e00e3eb2c85e4287629f0c138b9209abe"}
+      ]
+    },
+    {
+      "id": "ppo-linear-prism-n8000-e16384",
+      "status": "completed",
+      "classification": "v5_budget_study",
+      "method": "prism",
+      "reward_architecture": "frozen_linear",
+      "preference_pairs": 8000,
+      "episodes": 16384,
+      "scheduler_total_episodes": 65536,
+      "metrics": {
+        "luna_vs_empirical": {"win_rate": 0.4075, "ci95": [0.3665, 0.4505], "prompts": 500, "helpful_win_rate": 0.35655737704918034, "harmless_win_rate": 0.5466417910447762},
+        "luna_vs_sft": {"win_rate": 0.562, "ci95": [0.522, 0.6005125], "prompts": 500, "helpful_win_rate": 0.523224043715847, "harmless_win_rate": 0.667910447761194},
+        "ifeval": {"prompts": 541, "instructions": 834, "sft_prompt_strict": 0.45471349353049906, "actor_prompt_strict": 0.3179297597042514, "actor_instruction_strict": 0.43764988009592326, "paired_prompt_delta": -0.1367837338262477, "paired_delta_ci95": [-0.17744916820702403, -0.09796672828096119]},
+        "generation": {"prompts": 500, "sequence_kl_mc": 14.463366329669952, "mean_response_tokens": 80.888, "eos_rate": 0.994, "truncation_rate": 0.006},
+        "internal_probe": {"paired_reward_delta": 1.7392826046787406, "paired_rlhf_objective_delta": 1.0181067143908908, "sequence_kl_mc": 14.423517805757001, "mean_response_tokens": 89.205078125, "critic_explained_variance": 0.49325777196714893}
+      },
+      "evidence": [
+        {"path": "local/v5-execution/8k-final/summaries/results.json", "sha256": "cb1a97054b101ee723965256d817c5f791bef3471119dfb5bbfc8893df639a55"},
+        {"path": "local/v5-execution/8k-final/summaries/linear-ppo-prism-ifeval.json", "sha256": "00683fe2b8913ac3dd53c5760a23c6d14f12c0ba3d4c28f1a089b24d125ec92d"},
+        {"path": "local/v5-execution/8k-final/evaluation/prism/generation.metrics.json", "sha256": "ddb2197848d57581cc1d7efe93650aa2df83ad1fd1d701ad78ee6a96a8267a2f"},
+        {"path": "local/v5-execution/8k-final/policy/prism/probes/00016384-dev_probe.json", "sha256": "2339625db5e8159d6eeb05272a5f54f9ae299c3f48c8e1af2886bdcaf2306d98"}
       ]
     },
     {

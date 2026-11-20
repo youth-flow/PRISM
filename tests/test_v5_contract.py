@@ -73,7 +73,7 @@ def test_v5_rejects_protocol_drift(section, key, value):
 
 def test_registry_contains_primary_and_separated_controls():
     value = load_registry(REGISTRY)
-    assert value["counts"] == {"reward_runs": 14, "ppo_runs": 5}
+    assert value["counts"] == {"reward_runs": 20, "ppo_runs": 7}
     primary_rewards = [run for run in value["reward_runs"]
                        if run["classification"] == "v5_primary"]
     primary_policies = [run for run in value["ppo_runs"]
@@ -90,6 +90,16 @@ def test_registry_contains_primary_and_separated_controls():
         ("empirical", 0.001), ("prism", 0.001),
         ("empirical", 0.01), ("prism", 0.01),
     }
+    budget_rewards = [run for run in value["reward_runs"]
+                      if run["classification"] == "v5_budget_study"]
+    budget_policies = [run for run in value["ppo_runs"]
+                       if run["classification"] == "v5_budget_study"]
+    assert {(run["method"], run["preference_pairs"], run["l2"])
+            for run in budget_rewards} == {
+                ("empirical", 8000, 0.1), ("prism", 8000, 0.1)}
+    assert {(run["method"], run["preference_pairs"], run["episodes"])
+            for run in budget_policies} == {
+                ("empirical", 8000, 16384), ("prism", 8000, 16384)}
     assert any(run["architecture"] == "lora_plus_linear"
                and run["classification"] == "out_of_scope_control"
                for run in value["reward_runs"])
@@ -113,6 +123,14 @@ def test_registry_seals_key_reported_results():
     rewards = {run["id"]: run for run in value["reward_runs"]}
     assert rewards["reward-linear-prism-n14000-l2-0.01"]["metrics"][
         "development_bt_nll"] == pytest.approx(0.6880422639599899)
+    prism8 = policies["ppo-linear-prism-n8000-e16384"]["metrics"]
+    empirical8 = policies["ppo-linear-empirical-n8000-e16384"]["metrics"]
+    assert prism8["luna_vs_empirical"]["win_rate"] == pytest.approx(0.4075)
+    assert prism8["luna_vs_sft"]["win_rate"] == pytest.approx(0.562)
+    assert empirical8["luna_vs_sft"]["win_rate"] == pytest.approx(0.67)
+    assert prism8["generation"]["sequence_kl_mc"] == pytest.approx(14.463366329669952)
+    assert empirical8["ifeval"]["actor_prompt_strict"] == pytest.approx(
+        0.4011090573012939)
 
 
 def test_registry_rejects_promoting_lora_control_to_primary():
@@ -127,7 +145,7 @@ def test_cli_validates_and_rejects_lora_execution(capsys):
     cli.main(["validate", "--config", str(CONFIG)])
     output = json.loads(capsys.readouterr().out)
     assert output["structural_validation"] == "passed"
-    assert output["registry"]["counts"] == {"reward_runs": 14, "ppo_runs": 5}
+    assert output["registry"]["counts"] == {"reward_runs": 20, "ppo_runs": 7}
     with pytest.raises(SystemExit, match="rejects non-linear"):
         cli.main(["lora-ppo-policy", "--config", str(CONFIG)])
 
@@ -135,6 +153,8 @@ def test_cli_validates_and_rejects_lora_execution(capsys):
 def test_v5_delegates_only_after_contract_validation(capsys):
     cli.main(["resource", "--for-stage", "linear-ppo-policy", "--config", str(CONFIG)])
     assert capsys.readouterr().out.strip() == "gpu"
+    cli.main(["resource", "--for-stage", "lora-ppo-ifeval-sft", "--config", str(CONFIG)])
+    assert capsys.readouterr().out.strip() == "cpu"
 
 
 @pytest.mark.parametrize(
