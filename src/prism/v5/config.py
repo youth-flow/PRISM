@@ -20,6 +20,9 @@ SCHEDULE_EPISODES = 65536
 PREFERENCE_BUDGET = 14000
 DESIGN_LAMBDA = 0.001
 REWARD_L2 = 0.1
+EIGHT_K_BUDGET = 8000
+EIGHT_K_PROFILE = "budget_n8000"
+DEVELOPMENT_SELECTED_L2 = "shared_development_mean_bt_nll"
 METHODS = ["empirical", "prism"]
 EVALUATIONS = ["reward_development", "luna_ab_ba", "ifeval", "sequence_kl"]
 
@@ -45,12 +48,19 @@ def validate_v5(c):
     contract = c.get("v5")
     if not isinstance(contract, dict):
         raise ValueError("Missing V5 frozen experiment contract")
+    profile = contract.get("study_variant", "primary_n14000")
+    if profile == "primary_n14000":
+        budget, reward_l2 = PREFERENCE_BUDGET, REWARD_L2
+    elif profile == EIGHT_K_PROFILE:
+        budget, reward_l2 = EIGHT_K_BUDGET, DEVELOPMENT_SELECTED_L2
+    else:
+        raise ValueError(f"Unknown V5 study variant: {profile}")
     _require(contract, {
         "contract_version": "olmo1b_hh_linear_v5",
         "primary_methods": METHODS,
-        "preference_budget": PREFERENCE_BUDGET,
+        "preference_budget": budget,
         "design_lambda": DESIGN_LAMBDA,
-        "reward_l2": REWARD_L2,
+        "reward_l2": reward_l2,
         "formal_ppo_episodes": FORMAL_EPISODES,
         "scheduler_total_episodes": SCHEDULE_EPISODES,
         "evaluation_suites": EVALUATIONS,
@@ -110,9 +120,9 @@ def plan(c):
         "data": {"id": c["data"]["source_id"], "revision": c["data"]["revision"]},
         "reward": {
             "type": "frozen_sft_eos2048_bias_free_linear_bt",
-            "preference_budget": PREFERENCE_BUDGET,
+            "preference_budget": c["v5"]["preference_budget"],
             "design_lambda": DESIGN_LAMBDA,
-            "l2": REWARD_L2,
+            "l2": c["v5"]["reward_l2"],
         },
         "ppo": {
             "methods": METHODS,

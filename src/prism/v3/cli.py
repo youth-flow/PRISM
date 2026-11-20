@@ -12,6 +12,7 @@ GPU_STAGES = {"extract-features", "prepare-shared", "shared-smoke", "policy", "e
               "lora-ppo-ifeval-generate", "linear-ppo-smoke", "linear-ppo-policy",
               "linear-ppo-ifeval-generate"}
 STAGES = ("validate", "plan", "resource", "status", "download-data", "prepare-data", "extract-features",
+          "import-upstream",
           "merge-features", "geometry", "geometry-audit", "design", "design-report", "freeze-study", "sample", "reward",
           "prepare-shared", "merge-shared", "normalize-reward", "policy", "evaluate-generate", "merge-evaluation",
           "judge-export", "judge-import", "aggregate", "audit", "model-smoke", "shared-smoke", "audit-training",
@@ -39,6 +40,7 @@ def main(argv=None):
     parser.add_argument("--for-stage", choices=STAGES)
     parser.add_argument("--method", choices=["sft", "empirical", "prism", "full-pool-lora"])
     parser.add_argument("--source-manifest")
+    parser.add_argument("--upstream-config")
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shards", type=int)
     parser.add_argument("--design-lambda", type=float)
@@ -85,7 +87,12 @@ def main(argv=None):
     else:
         if not args.execute:
             parser.error(f"{args.stage} requires --execute; plan/validate do not execute work")
-        if args.stage == "download-data":
+        if args.stage == "import-upstream":
+            if not args.upstream_config:
+                parser.error("import-upstream requires --upstream-config")
+            from prism.v5.bootstrap import import_upstream
+            value = import_upstream(c, args.upstream_config)
+        elif args.stage == "download-data":
             from .data import download_raw
             value = download_raw(c)
         elif args.stage == "prepare-data":

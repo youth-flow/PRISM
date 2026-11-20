@@ -12,6 +12,7 @@ from .registry import load_registry, summary
 DEFAULT_CONFIG = str(Path(__file__).resolve().parents[3] / "configs/experiment.v5.yaml")
 LOCAL_STAGES = {"validate", "plan", "results"}
 EXECUTION_STAGES = {
+    "import-upstream",
     "resource", "status", "download-data", "prepare-data", "extract-features",
     "merge-features", "geometry", "geometry-audit", "design", "design-report",
     "freeze-study", "sample", "reward", "audit-training", "prepare-shared",
@@ -47,15 +48,17 @@ def _option(argv, name):
     return None
 
 
-def _guard_execution(argv):
+def _guard_execution(argv, c):
     stage = argv[0]
     method = _option(argv, "--method")
     if method == "full-pool-lora":
         raise SystemExit("V5 rejects LoRA Reward/PPO controls as executable primary methods")
     if stage == "freeze-study":
         budget, design = _option(argv, "--budget"), _option(argv, "--design-lambda")
-        if budget != "14000" or design is None or float(design) != 0.001:
-            raise SystemExit("V5 freeze-study requires --budget 14000 --design-lambda 0.001")
+        expected = str(c["v5"]["preference_budget"])
+        if budget != expected or design is None or float(design) != 0.001:
+            raise SystemExit(
+                f"V5 freeze-study requires --budget {expected} --design-lambda 0.001")
     if stage == "linear-ppo-policy":
         stop = _option(argv, "--stop-after-episodes")
         if stop != "16384":
@@ -90,6 +93,6 @@ def main(argv=None):
         value = summary(load_registry(c["_v5_registry_path"]))
     else:
         # The V3 engine is reused only after the stricter V5 contract passes.
-        _guard_execution(argv)
+        _guard_execution(argv, c)
         return v3_main(_with_default_config(argv))
     print(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False))

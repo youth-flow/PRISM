@@ -35,6 +35,26 @@ RECIPE = {
 }
 
 
+def _recipe(c):
+    """Return the sealed 14k recipe or the explicitly isolated V5 8k variant."""
+    contract = c.get("v5")
+    if not isinstance(contract, dict):
+        return dict(RECIPE)
+    budget = contract.get("preference_budget")
+    design_lambda = contract.get("design_lambda")
+    reward_l2 = contract.get("reward_l2")
+    if budget == 14000 and reward_l2 == .1:
+        return dict(RECIPE)
+    if (contract.get("study_variant") == "budget_n8000" and budget == 8000
+            and math.isclose(design_lambda, .001, rel_tol=0., abs_tol=1e-15)
+            and reward_l2 == "shared_development_mean_bt_nll"):
+        return {**RECIPE,
+                "protocol": "v5_frozen_linear_reward_n8000_distributed_ppo_v1",
+                "preference_budget": 8000,
+                "reward_l2": reward_l2}
+    raise ValueError("Linear PPO rejects an unsealed Reward-budget variant")
+
+
 def sources():
     folder = Path(__file__).resolve().parent
     return [Path(__file__), folder / "ppo.py", folder / "ppo_trainer.py",
@@ -74,15 +94,22 @@ def _execution_settings(settings):
 
 def _linear_identity(run, method):
     _require_method(method)
+    recipe = _recipe(run.config)
     selection = run.selection()
     reward_report = read_json(run.file("reward/selection.json"))
-    if (selection.get("budget") != RECIPE["preference_budget"]
-            or not math.isclose(selection.get("design_lambda", -1), RECIPE["design_lambda"],
+    selected_l2 = reward_report.get("selected_l2")
+    expected_l2 = recipe["reward_l2"]
+    l2_valid = (selected_l2 in run.config["reward"]["l2_candidates"]
+                and reward_report.get("selection_metric")
+                == "equal_method_mean_development_bt_nll") if isinstance(expected_l2, str) else (
+                    type(selected_l2) in (int, float)
+                    and math.isclose(selected_l2, expected_l2, rel_tol=0., abs_tol=1e-15))
+    if (selection.get("budget") != recipe["preference_budget"]
+            or not math.isclose(selection.get("design_lambda", -1), recipe["design_lambda"],
                                 rel_tol=0., abs_tol=1e-15)
-            or reward_report.get("budget") != RECIPE["preference_budget"]
-            or not math.isclose(reward_report.get("selected_l2", -1), RECIPE["reward_l2"],
-                                rel_tol=0., abs_tol=1e-15)):
-        raise ValueError("Linear PPO requires the audited 14k / lambda=.001 / Reward L2=.1 study")
+            or reward_report.get("budget") != recipe["preference_budget"]
+            or not l2_valid):
+        raise ValueError("Linear PPO Reward identity differs from the sealed study")
     reward_path = run.file(f"reward/{method}.npz")
     norm_path = run.file(f"normalization/{method}.json")
     normalizer = read_json(norm_path)
@@ -111,13 +138,14 @@ def admit(c, *, user_confirmed=False):
     if user_confirmed is not True:
         raise ValueError("Linear PPO requires explicit user confirmation of the 16k horizon")
     run = Run(c)
+    recipe = _recipe(c)
     if run.completed("linear-ppo-admission"):
         return read_json(run.file("control/linear-ppo-admission.json"))
     for stage in ("data", "study-selection", "reward", "training-audit",
                   "shared-sft", "normalization"):
         run.require(stage)
     identities = {method: _linear_identity(run, method)[2] for method in METHODS}
-    value = {**RECIPE, "user_confirmed": True, "methods": identities,
+    value = {**recipe, "user_confirmed": True, "methods": identities,
              "unchanged_ppo_fields": [
                  "actor_lora", "critic_lora", "rollout_batch_size", "mini_batch_size",
                  "num_ppo_epochs", "learning_rates", "kl_coef", "clip_ranges",
@@ -185,6 +213,7 @@ def policy_smoke(c, method):
                                   initialize_process_group, rank0)
     _require_method(method)
     _require_recipe(c)
+    recipe = _recipe(c)
     rank, world, _ = initialize_process_group(allowed_world_sizes=(4,))
     run = Run(c)
     stage = f"linear-ppo-smoke-{method}"
@@ -233,7 +262,7 @@ def policy_smoke(c, method):
         reward_versions = {name: parameter._version
                            for name, parameter in reward.backbone.named_parameters()}
         reward_weights = reward.weights.detach().clone()
-        contract = hash_json({"config": run.fingerprint, "recipe": RECIPE,
+        contract = hash_json({"config": run.fingerprint, "recipe": recipe,
                               "identity": identity, "world_size": world,
                               "sources": {path.name: digest(path) for path in sources()}})
         engine = DistributedPPOEngine(
@@ -315,6 +344,7 @@ def train_policy(c, method, *, stop_after_episodes, resume=False):
                                   prefit_critic_distributed, rank0)
     _require_method(method)
     _require_recipe(c)
+    recipe = _recipe(c)
     if stop_after_episodes != FORMAL_HORIZON:
         raise ValueError(f"Formal linear PPO must stop at exactly {FORMAL_HORIZON} episodes")
     rank, world, _ = initialize_process_group(allowed_world_sizes=(4,))
@@ -354,11 +384,11 @@ def train_policy(c, method, *, stop_after_episodes, resume=False):
             "formal_horizon": FORMAL_HORIZON,
             "scheduler_total_episodes": execution["total_episodes"],
             "executor_sources": {path.name: digest(path) for path in sources()},
-            "recipe": RECIPE})
+            "recipe": recipe})
         contract_path = target / "contract.json"
         if rank0():
             write_json(contract_path, {
-                "protocol": RECIPE["protocol"], "contract_hash": contract,
+                "protocol": recipe["protocol"], "contract_hash": contract,
                 "method": method, "identity": identity, "distributed_world_size": world,
                 "formal_horizon": FORMAL_HORIZON,
                 "scheduler_total_episodes": execution["total_episodes"],
@@ -399,7 +429,7 @@ def train_policy(c, method, *, stop_after_episodes, resume=False):
         result = engine.run(stop_after_episodes=FORMAL_HORIZON, on_checkpoint=probe)
         formal_complete = engine.completed_episodes == FORMAL_HORIZON
         result.update(method=method, seed=c["study"]["seed"],
-                      budget=RECIPE["preference_budget"], executor=PROTOCOL,
+                      budget=recipe["preference_budget"], executor=PROTOCOL,
                       distributed_world_size=world,
                       formal_horizon=FORMAL_HORIZON,
                       formal_horizon_completed=formal_complete,
