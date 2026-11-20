@@ -1,0 +1,278 @@
+{
+  "schema_version": 1,
+  "protocol": "olmo1b_hh_evaluation_registry_v1",
+  "created_at": "2026-11-20",
+  "scope": {
+    "sft_model": "allenai/OLMo-2-0425-1B-SFT",
+    "sft_revision": "0d85a3d037876ce6ac7d4311d994400fc66ac27f",
+    "preference_data": "Anthropic/hh-rlhf",
+    "preference_data_revision": "09be8c5bbc57cb3887f3a9732ad6aa7ec602a1fa",
+    "included": "completed Reward and PPO evaluations using this exact SFT revision and HH preference pool",
+    "excluded": "V1/V2 generated-candidate studies and incomplete or unverified runs"
+  },
+  "counts": {
+    "reward_runs": 10,
+    "ppo_runs": 5
+  },
+  "reward_runs": [
+    {
+      "id": "reward-linear-empirical-n14000",
+      "status": "completed",
+      "classification": "v5_primary",
+      "method": "empirical",
+      "architecture": "frozen_linear",
+      "preference_pairs": 14000,
+      "design_lambda": 0.001,
+      "l2": 0.1,
+      "metrics": {
+        "training_accuracy": 0.6653571428571429,
+        "training_bt_nll": 0.6113567290967868,
+        "development_pairs": 2048,
+        "development_accuracy": 0.57080078125,
+        "development_bt_nll": 0.6768462613636004
+      },
+      "evidence": [
+        {"path": "local/v3-execution/full-pool-reward/diagnostics/full-pool-reward/summary.json", "sha256": "a355d2be390c8200a5fef9fd4276d24a3deb542b9e389b868ea678953d82b2a0"}
+      ]
+    },
+    {
+      "id": "reward-linear-prism-n14000",
+      "status": "completed",
+      "classification": "v5_primary",
+      "method": "prism",
+      "architecture": "frozen_linear",
+      "preference_pairs": 14000,
+      "design_lambda": 0.001,
+      "l2": 0.1,
+      "metrics": {
+        "training_accuracy": 0.7077142857142857,
+        "training_bt_nll": 0.5670891898052791,
+        "development_pairs": 2048,
+        "development_accuracy": 0.57958984375,
+        "development_bt_nll": 0.6714467664480286
+      },
+      "evidence": [
+        {"path": "local/v3-execution/full-pool-reward/diagnostics/full-pool-reward/summary.json", "sha256": "a355d2be390c8200a5fef9fd4276d24a3deb542b9e389b868ea678953d82b2a0"}
+      ]
+    },
+    {
+      "id": "reward-linear-full-pool-l2-0.001",
+      "status": "completed",
+      "classification": "historical_linear_diagnostic",
+      "method": "full_pool",
+      "architecture": "frozen_linear",
+      "preference_pairs": 159682,
+      "l2": 0.001,
+      "metrics": {
+        "training_accuracy": 0.6298706178529828,
+        "training_bt_nll": 0.6357360854257266,
+        "development_pairs": 2048,
+        "development_accuracy": 0.6025390625,
+        "development_bt_nll": 0.6598419112811837
+      },
+      "evidence": [
+        {"path": "local/v3-execution/full-pool-reward/diagnostics/full-pool-reward/summary.json", "sha256": "a355d2be390c8200a5fef9fd4276d24a3deb542b9e389b868ea678953d82b2a0"}
+      ]
+    },
+    {
+      "id": "reward-linear-full-pool-l2-0.01",
+      "status": "completed",
+      "classification": "historical_linear_diagnostic",
+      "method": "full_pool",
+      "architecture": "frozen_linear",
+      "preference_pairs": 159682,
+      "l2": 0.01,
+      "selected_by_development_nll": true,
+      "metrics": {
+        "training_accuracy": 0.6279856214225774,
+        "training_bt_nll": 0.6373969821322116,
+        "development_pairs": 2048,
+        "development_accuracy": 0.60693359375,
+        "development_bt_nll": 0.6580150463344494
+      },
+      "evidence": [
+        {"path": "local/v3-execution/full-pool-reward/diagnostics/full-pool-reward/summary.json", "sha256": "a355d2be390c8200a5fef9fd4276d24a3deb542b9e389b868ea678953d82b2a0"}
+      ]
+    },
+    {
+      "id": "reward-linear-full-pool-l2-0.1",
+      "status": "completed",
+      "classification": "historical_linear_diagnostic",
+      "method": "full_pool",
+      "architecture": "frozen_linear",
+      "preference_pairs": 159682,
+      "l2": 0.1,
+      "metrics": {
+        "training_accuracy": 0.6180596435415389,
+        "training_bt_nll": 0.6458811761378283,
+        "development_pairs": 2048,
+        "development_accuracy": 0.59716796875,
+        "development_bt_nll": 0.6593477604640264
+      },
+      "evidence": [
+        {"path": "local/v3-execution/full-pool-reward/diagnostics/full-pool-reward/summary.json", "sha256": "a355d2be390c8200a5fef9fd4276d24a3deb542b9e389b868ea678953d82b2a0"}
+      ]
+    },
+    {
+      "id": "reward-lora-linear-10000",
+      "status": "completed",
+      "classification": "out_of_scope_control",
+      "method": "full_pool_prefix",
+      "architecture": "lora_plus_linear",
+      "preference_pairs": 10000,
+      "metrics": {"training_accuracy": 0.6102, "development_pairs": 2048, "development_accuracy": 0.5771484375, "development_bt_nll": 0.6699402270518646},
+      "evidence": [
+        {"path": "local/v3-execution/lora-fresh/final/diagnostics/full-pool-lora-reward-fresh-head/summary.json", "sha256": "f1391b9a77c84fc5c703173fe4f03bd7dacc176ec1c42cc86014524903ac41f3"}
+      ]
+    },
+    {
+      "id": "reward-lora-linear-50000",
+      "status": "completed",
+      "classification": "out_of_scope_control",
+      "method": "full_pool_prefix",
+      "architecture": "lora_plus_linear",
+      "preference_pairs": 50000,
+      "metrics": {"training_accuracy": 0.70148, "development_pairs": 2048, "development_accuracy": 0.6689453125, "development_bt_nll": 0.5980414214142638},
+      "evidence": [
+        {"path": "local/v3-execution/lora-fresh/final/diagnostics/full-pool-lora-reward-fresh-head/summary.json", "sha256": "f1391b9a77c84fc5c703173fe4f03bd7dacc176ec1c42cc86014524903ac41f3"}
+      ]
+    },
+    {
+      "id": "reward-lora-linear-100000",
+      "status": "completed",
+      "classification": "out_of_scope_control",
+      "method": "full_pool_prefix",
+      "architecture": "lora_plus_linear",
+      "preference_pairs": 100000,
+      "metrics": {"training_accuracy": 0.71194, "development_pairs": 2048, "development_accuracy": 0.693359375, "development_bt_nll": 0.5727118998481582},
+      "evidence": [
+        {"path": "local/v3-execution/lora-fresh/final/diagnostics/full-pool-lora-reward-fresh-head/summary.json", "sha256": "f1391b9a77c84fc5c703173fe4f03bd7dacc176ec1c42cc86014524903ac41f3"}
+      ]
+    },
+    {
+      "id": "reward-lora-linear-147360-selected",
+      "status": "completed",
+      "classification": "out_of_scope_control",
+      "method": "full_pool_prefix",
+      "architecture": "lora_plus_linear",
+      "preference_pairs": 147360,
+      "selected_by_development_nll": true,
+      "metrics": {"training_accuracy": 0.7109866992399566, "development_pairs": 2048, "development_accuracy": 0.6962890625, "development_bt_nll": 0.5665896117732541},
+      "evidence": [
+        {"path": "local/v3-execution/lora-fresh/final/diagnostics/full-pool-lora-reward-fresh-head/summary.json", "sha256": "f1391b9a77c84fc5c703173fe4f03bd7dacc176ec1c42cc86014524903ac41f3"}
+      ]
+    },
+    {
+      "id": "reward-lora-linear-159682-final",
+      "status": "completed",
+      "classification": "out_of_scope_control",
+      "method": "full_pool",
+      "architecture": "lora_plus_linear",
+      "preference_pairs": 159682,
+      "metrics": {"training_accuracy": 0.7103806315051164, "development_pairs": 2048, "development_accuracy": 0.69287109375, "development_bt_nll": 0.5676369370520132},
+      "evidence": [
+        {"path": "local/v3-execution/lora-fresh/final/diagnostics/full-pool-lora-reward-fresh-head/summary.json", "sha256": "f1391b9a77c84fc5c703173fe4f03bd7dacc176ec1c42cc86014524903ac41f3"}
+      ]
+    }
+  ],
+  "ppo_runs": [
+    {
+      "id": "ppo-linear-empirical-n14000-e16384",
+      "status": "completed",
+      "classification": "v5_primary",
+      "method": "empirical",
+      "reward_architecture": "frozen_linear",
+      "preference_pairs": 14000,
+      "episodes": 16384,
+      "scheduler_total_episodes": 65536,
+      "metrics": {
+        "luna_vs_sft": {"win_rate": 0.669, "ci95": [0.6305, 0.7065], "prompts": 500, "helpful_win_rate": 0.6755464480874317, "harmless_win_rate": 0.6511194029850746},
+        "ifeval": {"prompts": 541, "instructions": 834, "sft_prompt_strict": 0.45471349353049906, "actor_prompt_strict": 0.4195933456561922, "actor_instruction_strict": 0.5371702637889688, "paired_prompt_delta": -0.03512014787430684, "paired_delta_ci95": [-0.07393715341959335, 0.0018484288354898336]},
+        "generation": {"prompts": 500, "sequence_kl_mc": 12.773201878488063, "mean_response_tokens": 185.39, "eos_rate": 0.988, "truncation_rate": 0.012}
+      },
+      "evidence": [
+        {"path": "local/v3-execution/lora-ppo/linear-final/hh-results.json", "sha256": "eb7a7e79f5c89a3055155aed70fdc371f19d1c87af2a73c790ece4030dc04cce"},
+        {"path": "local/v3-execution/lora-ppo/linear-final/empirical-ifeval.json", "sha256": "5eae7745759895fea7a40829714300e6567d43075ae70a21a3c1629150ebcda1"},
+        {"path": "local/v3-execution/lora-ppo/linear-final/empirical-generation.json", "sha256": "d6800f99e9a75b4fa9c3d1343809cdcaa5927bfe8730fd4e2671ffa736771337"}
+      ]
+    },
+    {
+      "id": "ppo-linear-prism-n14000-e16384",
+      "status": "completed",
+      "classification": "v5_primary",
+      "method": "prism",
+      "reward_architecture": "frozen_linear",
+      "preference_pairs": 14000,
+      "episodes": 16384,
+      "scheduler_total_episodes": 65536,
+      "metrics": {
+        "luna_vs_empirical": {"win_rate": 0.592, "ci95": [0.5535, 0.6315], "prompts": 500, "helpful_win_rate": 0.5676229508196722, "harmless_win_rate": 0.6585820895522388},
+        "luna_vs_sft": {"win_rate": 0.7135, "ci95": [0.6775, 0.7510125], "prompts": 500, "helpful_win_rate": 0.7165300546448088, "harmless_win_rate": 0.7052238805970149},
+        "ifeval": {"prompts": 541, "instructions": 834, "sft_prompt_strict": 0.45471349353049906, "actor_prompt_strict": 0.4048059149722736, "actor_instruction_strict": 0.5347721822541966, "paired_prompt_delta": -0.04990757855822551, "paired_delta_ci95": [-0.09057301293900184, -0.012939001848428836]},
+        "generation": {"prompts": 500, "sequence_kl_mc": 10.552648082017898, "mean_response_tokens": 167.81, "eos_rate": 0.988, "truncation_rate": 0.012}
+      },
+      "evidence": [
+        {"path": "local/v3-execution/lora-ppo/linear-final/hh-results.json", "sha256": "eb7a7e79f5c89a3055155aed70fdc371f19d1c87af2a73c790ece4030dc04cce"},
+        {"path": "local/v3-execution/lora-ppo/linear-final/prism-ifeval.json", "sha256": "3134d3e31c60b391a3807c831271a120123e56cccf3604282ea855677e15ca6d"},
+        {"path": "local/v3-execution/lora-ppo/linear-final/prism-generation.json", "sha256": "101791bc781825511ef74c656d8198281c33de0cd434a14cd99dea617c4eb382"}
+      ]
+    },
+    {
+      "id": "ppo-lora-reward-e16384",
+      "status": "completed",
+      "classification": "out_of_scope_control",
+      "method": "full_pool_lora",
+      "reward_architecture": "lora_plus_linear",
+      "preference_pairs": 147360,
+      "episodes": 16384,
+      "metrics": {
+        "luna_vs_sft": {"win_rate": 0.6515, "ci95": [0.612, 0.688], "prompts": 500},
+        "ifeval": {"prompts": 541, "instructions": 834, "sft_prompt_strict": 0.45471349353049906, "actor_prompt_strict": 0.42513863216266173, "actor_instruction_strict": 0.5551558752997602, "paired_prompt_delta": -0.029574861367837338, "paired_delta_ci95": [-0.066543438077634, 0.0073937153419593345]},
+        "generation": {"prompts": 500, "sequence_kl_mc": 5.912182578980922, "mean_response_tokens": 172.776, "eos_rate": 0.972, "truncation_rate": 0.028}
+      },
+      "evidence": [
+        {"path": "local/v3-execution/lora-ppo/judge-16k/final/luna-summary.json", "sha256": "95fc3fbadc3a13c50bce76bdd00919f9d008aa66abfeccab045b507975b06897"},
+        {"path": "local/v3-execution/lora-ppo/judge-16k/final/ifeval-summary.json", "sha256": "403cb289544ff2cc64c9f90b6e9b2e603a3a9243cc28c3c01778245295991763"},
+        {"path": "local/v3-execution/lora-ppo/judge-16k/final/hh-generation-metrics.json", "sha256": "f0b700e3850bfae2b57d0077639d0b5cfbb011a96b969a691d701aa4cf205fd2"}
+      ]
+    },
+    {
+      "id": "ppo-lora-reward-e32768",
+      "status": "completed",
+      "classification": "out_of_scope_control",
+      "method": "full_pool_lora",
+      "reward_architecture": "lora_plus_linear",
+      "preference_pairs": 147360,
+      "episodes": 32768,
+      "metrics": {
+        "luna_vs_sft": {"win_rate": 0.6465, "ci95": [0.6075, 0.6855], "prompts": 500},
+        "ifeval": {"prompts": 541, "instructions": 834, "sft_prompt_strict": 0.45471349353049906, "actor_prompt_strict": 0.4288354898336414, "actor_instruction_strict": 0.5467625899280576, "paired_prompt_delta": -0.025878003696857672, "paired_delta_ci95": [-0.06284658040665435, 0.009242144177449169]},
+        "generation": {"prompts": 500, "sequence_kl_mc": 6.443676144361496, "mean_response_tokens": 152.464, "eos_rate": 0.984, "truncation_rate": 0.016}
+      },
+      "evidence": [
+        {"path": "local/v3-execution/lora-ppo/judge-32k/final/luna-summary.json", "sha256": "69152ff82a0969390e17c373fc7fd248074d66152d4ef961059481b4486a92e1"},
+        {"path": "local/v3-execution/lora-ppo/judge-32k/final/ifeval-summary.json", "sha256": "3e458b10fd9795602333a77bc2380f2ce6eae4cfca983cda99e255447279ce1c"},
+        {"path": "local/v3-execution/lora-ppo/judge-32k/final/hh-generation-metrics.json", "sha256": "c3b81e8b77acac3b82b02b10bec6be62fdb56c00362895b61d2a98687558af21"}
+      ]
+    },
+    {
+      "id": "ppo-lora-reward-e65536",
+      "status": "completed",
+      "classification": "out_of_scope_control",
+      "method": "full_pool_lora",
+      "reward_architecture": "lora_plus_linear",
+      "preference_pairs": 147360,
+      "episodes": 65536,
+      "metrics": {
+        "luna_vs_sft": {"win_rate": 0.659, "ci95": [0.6214875000000001, 0.6955125], "prompts": 500},
+        "ifeval": {"prompts": 541, "instructions": 834, "sft_prompt_strict": 0.45471349353049906, "actor_prompt_strict": 0.4121996303142329, "actor_instruction_strict": 0.5419664268585132, "paired_prompt_delta": -0.04251386321626617, "paired_delta_ci95": [-0.07763401109057301, -0.005545286506469501]},
+        "generation": {"prompts": 500, "sequence_kl_mc": 6.484311226129532, "mean_response_tokens": 160.83, "eos_rate": 0.99, "truncation_rate": 0.01}
+      },
+      "evidence": [
+        {"path": "local/v3-execution/lora-ppo/judge-65k/final/luna-summary.json", "sha256": "07737ff1740edaf0f72e7ea7ac92ff9def525c7d9bc82524b9e298c240140bee"},
+        {"path": "local/v3-execution/lora-ppo/judge-65k/final/ifeval-summary.json", "sha256": "b5a969018fa29c5fa7e93e35916edd3c42786de872a7cbda9e94e762d1b940ae"},
+        {"path": "local/v3-execution/lora-ppo/judge-65k/final/hh-generation-metrics.json", "sha256": "aa9b3ee069c4e1d9122fa5d58944b0e157b8fa36d74dad0f8d133232ff147184"}
+      ]
+    }
+  ]
+}
