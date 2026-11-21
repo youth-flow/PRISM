@@ -18,6 +18,7 @@ benchmark = ["absl-py==2.2.2", "langdetect==1.0.9", "nltk==3.9.1", "immutabledic
 prism = "prism.cli:main"
 prism-v3 = "prism.v3.cli:main"
 prism-v5 = "prism.v5.cli:main"
+prism-v6 = "prism.v6.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

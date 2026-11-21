@@ -37,10 +37,203 @@ def empirical(index):
 
 def objective_gradient(v, K, q, ridge):
     A = ridge * np.eye(v.shape[1]) + v.T @ (q[:, None] * v)
+    return objective_gradient_from_information(v, K, A)
+
+
+def objective_gradient_from_information(v, K, information):
+    """Evaluate the objective/gradient from an already accumulated matrix."""
+    v, K, information = (np.asarray(a, dtype=np.float64) for a in (v, K, information))
+    if (v.ndim != 2 or K.shape != (v.shape[1], v.shape[1])
+            or information.shape != K.shape or not all(np.isfinite(a).all()
+                                                        for a in (v, K, information))):
+        raise ValueError("Invalid Design information matrix")
+    A = information
     inv = cho_solve(cho_factor(A), np.eye(len(A)))
     B = inv @ K @ inv
     sensitivity = np.einsum("ij,jk,ik->i", v, B, v, optimize=True)
     return float(np.sum(K * inv.T)), -sensitivity
+
+
+def capped_simplex_lmo(gradient, budget):
+    """Linear minimizer for sum(q)=1 and 0<=q_i<=1/budget.
+
+    Every vertex is uniform on exactly ``budget`` coordinates.  Lexicographic
+    tie-breaking makes the numerical solver and its independent audit stable
+    across repeated runs.
+    """
+    gradient = np.asarray(gradient, dtype=np.float64)
+    if (gradient.ndim != 1 or not len(gradient) or not np.isfinite(gradient).all()
+            or type(budget) is not int or not 1 <= budget <= len(gradient)):
+        raise ValueError("Invalid capped-simplex linear minimization inputs")
+    indices = np.lexsort((np.arange(len(gradient), dtype=np.int64), gradient))[:budget]
+    indices.sort()
+    return indices, float(np.sum(gradient[indices], dtype=np.float64) / budget)
+
+
+def capped_simplex_gap(q, gradient, budget):
+    """Return the global Frank--Wolfe gap on the budget-capped simplex."""
+    q, gradient = (np.asarray(a, dtype=np.float64) for a in (q, gradient))
+    if q.shape != gradient.shape or not np.isfinite(q).all():
+        raise ValueError("Invalid capped-simplex gap inputs")
+    upper = 1.0 / budget
+    if (np.any(q < -1e-12) or np.any(q > upper + 1e-12)
+            or not np.isclose(q.sum(), 1, rtol=0, atol=1e-10)):
+        raise ValueError("Design weights violate the budget-capped simplex")
+    indices, minimum = capped_simplex_lmo(gradient, budget)
+    return max(0.0, float(q @ gradient - minimum)), indices
+
+
+def _weighted_information(v, weights, block_size):
+    matrix = np.zeros((v.shape[1], v.shape[1]), dtype=np.float64)
+    for start in range(0, len(v), block_size):
+        part = v[start:start + block_size]
+        matrix += part.T @ (weights[start:start + len(part), None] * part)
+    return matrix
+
+
+def _vertex_information(v, indices, budget, block_size):
+    matrix = np.zeros((v.shape[1], v.shape[1]), dtype=np.float64)
+    scale = 1.0 / budget
+    for start in range(0, len(indices), block_size):
+        part = v[indices[start:start + block_size]]
+        matrix += scale * (part.T @ part)
+    return matrix
+
+
+def capped_away_frank_wolfe(v, K, initial, ridge, budget, max_iter=500,
+                            relative_gap=1e-4, block_size=4096):
+    """Solve the budget-aware Design on a capped probability simplex.
+
+    The feasible region is ``sum(q)=1, 0<=q_i<=1/budget``.  Its vertices are
+    uniform distributions over exactly ``budget`` pool items, so the cap is a
+    direct continuous relaxation of selecting ``budget`` distinct pairs.  The
+    dense empirical initializer is retained as one redundant feasible atom;
+    away steps can remove its entire coefficient rather than one coordinate at
+    a time.  Only the capped-simplex global FW gap certifies convergence.
+    """
+    v, K, initial = (np.asarray(a, dtype=np.float64) for a in (v, K, initial))
+    if (v.ndim != 2 or not len(v) or initial.shape != (len(v),)
+            or not all(np.isfinite(a).all() for a in (v, K, initial))
+            or type(budget) is not int or not 1 <= budget <= len(v)
+            or type(max_iter) is not int or max_iter < 1
+            or type(block_size) is not int or block_size < 1
+            or not np.isfinite(ridge) or ridge <= 0
+            or not np.isfinite(relative_gap) or relative_gap <= 0):
+        raise ValueError("Invalid budget-capped Design inputs")
+    if (K.shape != (v.shape[1], v.shape[1]) or not np.allclose(K, K.T)
+            or np.linalg.eigvalsh(K).min() < -1e-8 * max(1, np.linalg.norm(K, 2))):
+        raise ValueError("K must be positive semidefinite")
+    upper = 1.0 / budget
+    if (np.any(initial < 0) or np.any(initial > upper + 1e-14)
+            or not np.isclose(initial.sum(), 1, rtol=0, atol=1e-12)):
+        raise ValueError("Initial Design is outside the budget-capped simplex")
+
+    q = initial.copy()
+    identity = np.eye(v.shape[1])
+    initial_matrix = _weighted_information(v, initial, block_size)
+    information = ridge * identity + initial_matrix
+    # None denotes the dense initializer; every other atom is a sorted int32
+    # array describing a capped-simplex vertex.
+    atoms, coefficients = [None], np.array([1.0], dtype=np.float64)
+    atom_lookup, history = {}, []
+
+    for iteration in range(max_iter):
+        value, gradient = objective_gradient_from_information(v, K, information)
+        gap, toward_indices = capped_simplex_gap(q, gradient, budget)
+        atom_gradients = np.empty(len(atoms), dtype=np.float64)
+        atom_gradients[0] = float(initial @ gradient)
+        for atom_index, indices in enumerate(atoms[1:], start=1):
+            atom_gradients[atom_index] = float(np.mean(gradient[indices]))
+        active = np.flatnonzero(coefficients > 0)
+        away_atom = int(active[np.argmax(atom_gradients[active])])
+        away_gap = max(0.0, float(atom_gradients[away_atom] - q @ gradient))
+        record = {
+            "iteration": iteration,
+            "objective": value,
+            "gap": gap,
+            "relative_gap": gap / max(value, 1e-15),
+            "initial_atom_weight": float(coefficients[0]),
+            "active_atoms": int(len(active)),
+            "maximum_weight": float(q.max()),
+        }
+        history.append(record)
+        if iteration % 10 == 0 or gap <= relative_gap * max(value, 1e-15):
+            print("design-capped-fw iteration={} objective={:.9g} relative_gap={:.6g} "
+                  "initial_atom={:.6g} active_atoms={}".format(
+                      iteration, value, record["relative_gap"], coefficients[0], len(active)),
+                  flush=True)
+        if gap <= relative_gap * max(value, 1e-15):
+            break
+
+        key = toward_indices.astype("<i4", copy=False).tobytes()
+        toward_atom = atom_lookup.get(key)
+        if toward_atom is None:
+            toward_atom = len(atoms)
+            atoms.append(toward_indices.astype(np.int32, copy=True))
+            coefficients = np.append(coefficients, 0.0)
+            atom_lookup[key] = toward_atom
+
+        atom = toward_atom
+        lower, upper_step = 0.0, 1.0
+        direction = "forward"
+        if away_gap > gap and coefficients[away_atom] < 1 - 1e-14:
+            atom = away_atom
+            lower = -float(coefficients[atom] / (1 - coefficients[atom]))
+            upper_step = 0.0
+            direction = "away_initial" if atom == 0 else "away_vertex"
+        if atom == 0:
+            atom_matrix = initial_matrix
+        else:
+            atom_matrix = _vertex_information(v, atoms[atom], budget, block_size)
+        line = _line_objective(information, K, ridge, mixture=atom_matrix)
+        result = minimize_scalar(line, bounds=(lower, upper_step), method="bounded",
+                                 options={"xatol": 1e-10})
+        step = min((lower, float(result.x), upper_step), key=line)
+        if abs(step) <= 1e-15:
+            record.update(direction=direction, step=0.0, stalled=True)
+            break
+        record.update(direction=direction, step=float(step), away_gap=away_gap)
+
+        coefficients *= 1 - step
+        coefficients[atom] += step
+        if step == lower and lower < 0:
+            coefficients[atom] = 0.0
+        coefficients[np.abs(coefficients) < 1e-15] = 0.0
+        if np.any(coefficients < -1e-12) or not np.isclose(coefficients.sum(), 1, atol=1e-10):
+            raise RuntimeError("Capped FW active-set coefficients became invalid")
+        coefficients = np.maximum(coefficients, 0)
+        coefficients /= coefficients.sum()
+        q *= 1 - step
+        if atom == 0:
+            q += step * initial
+        else:
+            q[atoms[atom]] += step / budget
+        information = (1 - step) * information + step * (ridge * identity + atom_matrix)
+        information = (information + information.T) / 2
+
+    # Reconstruct once from the active decomposition and independently
+    # recompute the original objective/gradient, eliminating recurrence drift.
+    q = coefficients[0] * initial
+    for coefficient, indices in zip(coefficients[1:], atoms[1:]):
+        if coefficient:
+            q[indices] += coefficient / budget
+    q[np.abs(q) < 1e-16] = 0.0
+    value, gradient = objective_gradient(v, K, q, ridge)
+    gap, _ = capped_simplex_gap(q, gradient, budget)
+    return q, {
+        "objective": value,
+        "fw_gap": gap,
+        "converged": bool(gap <= relative_gap * max(value, 1e-15)),
+        "solver": "capped_simplex_away_step_frank_wolfe",
+        "budget": budget,
+        "weight_upper_bound": 1.0 / budget,
+        "initial_representation": "one_redundant_feasible_empirical_atom",
+        "max_iter": max_iter,
+        "relative_gap_tolerance": relative_gap,
+        "iterations": len(history),
+        "active_atoms": int(np.count_nonzero(coefficients)),
+        "history": history,
+    }
 
 
 def _normalized_objective(v, K, weights, ridge):

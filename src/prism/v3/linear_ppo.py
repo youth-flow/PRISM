@@ -36,7 +36,20 @@ RECIPE = {
 
 
 def _recipe(c):
-    """Return the sealed 14k recipe or an explicitly isolated V5 budget variant."""
+    """Return the sealed recipe for V3, V5, or budget-aware V6."""
+    v6 = c.get("v6")
+    if isinstance(v6, dict):
+        budget = v6.get("preference_budget")
+        if (type(budget) is int and budget > 0
+                and math.isclose(v6.get("design_lambda", -1), .001,
+                                 rel_tol=0., abs_tol=1e-15)
+                and math.isclose(v6.get("reward_l2", -1), .1,
+                                 rel_tol=0., abs_tol=1e-15)):
+            return {**RECIPE,
+                    "protocol": f"v6_budget_capped_linear_reward_n{budget}_distributed_ppo_v1",
+                    "preference_budget": budget,
+                    "reward_l2": v6["reward_l2"]}
+        raise ValueError("Linear PPO rejects an invalid V6 Reward-budget contract")
     contract = c.get("v5")
     if not isinstance(contract, dict):
         return dict(RECIPE)

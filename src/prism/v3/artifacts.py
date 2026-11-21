@@ -147,7 +147,10 @@ class Run:
     def selection(self):
         self.require("study-selection")
         value = read_json(self.file("study/selection.json"))
-        if value.get("budget_authority") != "user_after_design_report":
+        expected_authority = ("v6_precommitted_budget_contract"
+                              if isinstance(self.config.get("v6"), dict)
+                              else "user_after_design_report")
+        if value.get("budget_authority") != expected_authority:
             raise ValueError("V3 budget requires an explicit user decision after Design")
         if type(value.get("budget")) is not int or value["budget"] < 1:
             raise ValueError("V3 preference budget has not been selected")

@@ -1,7 +1,8 @@
-"""Full HH finite-pair loglinear geometry and the original simplex Design.
+"""Full HH finite-pair loglinear geometry and certified Design solvers.
 
 No label is read here. Matrix accumulation uses float64 blocks, while frozen
-model features originate from FP32. The original joint solver is reused.
+model features originate from FP32. V3/V5 retain the original joint solver;
+V6 opts into a budget-capped feasible region through its explicit contract.
 """
 import math
 from pathlib import Path
@@ -11,7 +12,8 @@ import numpy as np
 from scipy.linalg import cho_factor, cho_solve
 from scipy.special import softmax
 
-from prism.design import joint_design
+from prism.design import (capped_away_frank_wolfe, capped_simplex_gap,
+                          joint_design)
 from .artifacts import Run, read_json, write_json
 from .recovery import recover_stage, seal_and_publish, stage_lock
 
@@ -156,16 +158,26 @@ def _solve_design(c, design_lambda):
         return read_json(marker)
     path = run.file(f"design/lambda-{tag}/q.npy")
     dependencies = [run.receipt_path("geometry")]
-    if recover_stage(run, stage, [path, marker], dependencies, code_paths=_sources(), context={"lambda": float(design_lambda)}):
+    v6 = c.get("v6") if isinstance(c.get("v6"), dict) else None
+    budget = v6.get("preference_budget") if v6 else None
+    if recover_stage(run, stage, [path, marker], dependencies, code_paths=_sources(),
+                     context={"lambda": float(design_lambda), "budget": budget}):
         return read_json(marker)
     started = time.monotonic()
     with np.load(run.file("geometry/geometry.npz"), allow_pickle=False) as geometry:
         v, K, empirical = geometry["v"], geometry["K"], geometry["empirical"]
-    q, original = joint_design(v, K, empirical, float(design_lambda),
-                               c["design"]["max_iter"], c["design"]["relative_gap"])
+    if c["design"].get("solver", "joint-lbfgs") == "capped-away-fw":
+        q, original = capped_away_frank_wolfe(
+            v, K, empirical, float(design_lambda), budget,
+            c["design"]["max_iter"], c["design"]["relative_gap"],
+            c["design"]["block_size"])
+    else:
+        q, original = joint_design(v, K, empirical, float(design_lambda),
+                                   c["design"]["max_iter"], c["design"]["relative_gap"])
     value, gradient = blocked_objective_gradient(v, K, q, float(design_lambda), c["design"]["block_size"])
     baseline, _ = blocked_objective_gradient(v, K, empirical, float(design_lambda), c["design"]["block_size"])
-    gap = max(0., float(q @ gradient - gradient.min()))
+    gap = (capped_simplex_gap(q, gradient, budget)[0] if v6 else
+           max(0., float(q @ gradient - gradient.min())))
     independently_converged = gap <= c["design"]["relative_gap"] * max(value, 1e-15)
     original_agreement = abs(value - original["objective"]) <= 1e-8 * max(1., abs(value))
     report = {**original, **distribution_diagnostics(q), "design_lambda": float(design_lambda),
@@ -175,16 +187,25 @@ def _solve_design(c, design_lambda):
               "converged": bool(original["converged"] and independently_converged and original_agreement),
               "empirical_objective_same_lambda": baseline,
               "objective_ratio_to_empirical_same_lambda": value / baseline if baseline else None,
-              "elapsed_seconds": time.monotonic() - started, "budget": None,
-              "extra_constraints": None, "probability_floor": 0.0,
-              "acceptance": "original_simplex_global_FW_gap_with_independent_blocked_recompute"}
+              "elapsed_seconds": time.monotonic() - started, "budget": budget,
+              "extra_constraints": ("sum_q=1_and_0<=q_i<=1/N" if v6 else None),
+              "probability_floor": 0.0,
+              "acceptance": ("budget_capped_simplex_global_FW_gap_with_independent_blocked_recompute"
+                             if v6 else
+                             "original_simplex_global_FW_gap_with_independent_blocked_recompute")}
+    if v6:
+        upper = 1.0 / budget
+        report.update(weight_upper_bound=upper,
+                      maximum_cap_violation=max(0.0, float(q.max() - upper)),
+                      support_covers_budget=bool(np.count_nonzero(q > 0) >= budget))
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("xb") as stream:
         np.save(stream, q, allow_pickle=False)
     write_json(marker, report)
     seal_and_publish(run, stage, [path, marker], dependencies, code_paths=_sources(),
-                     context={"lambda": float(design_lambda)}, metadata={
-        "design_lambda": float(design_lambda), "converged": report["converged"]})
+                     context={"lambda": float(design_lambda), "budget": budget}, metadata={
+        "design_lambda": float(design_lambda), "budget": budget,
+        "converged": report["converged"]})
     return report
 
 
@@ -206,10 +227,16 @@ def _design_report(c):
     path = run.file("design/report.json")
     if recover_stage(run, "design-report", [path], dependencies, code_paths=_sources()):
         return read_json(path)
-    result = {"designs": reports, "budget": None, "budget_authority": "user_after_design_report",
+    v6 = c.get("v6") if isinstance(c.get("v6"), dict) else None
+    budget = v6.get("preference_budget") if v6 else None
+    result = {"designs": reports, "budget": budget,
+              "budget_authority": ("v6_precommitted_budget_contract" if v6 else
+                                   "user_after_design_report"),
               "automatic_budget_selection": False, "all_converged": all(r["converged"] for r in reports),
-              "note": "Compare within-lambda objective ratios and sparsity; raw objectives across lambdas are not comparable."}
+              "note": ("Compare within-lambda objective ratios under the same budget cap; raw objectives across lambdas are not comparable."
+                       if v6 else
+                       "Compare within-lambda objective ratios and sparsity; raw objectives across lambdas are not comparable.")}
     write_json(path, result)
     seal_and_publish(run, "design-report", [path], dependencies, code_paths=_sources(),
-                     metadata={"all_converged": result["all_converged"]})
+                     metadata={"all_converged": result["all_converged"], "budget": budget})
     return result

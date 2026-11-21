@@ -13,6 +13,7 @@ import numpy as np
 
 
 PROTOCOL = "weighted_without_replacement_gumbel_v1"
+DEPENDENT_ROUNDING_PROTOCOL = "fixed_size_dependent_rounding_v1"
 
 
 def weighted_without_replacement(weights, size, seed):
@@ -64,4 +65,78 @@ def weighted_without_replacement(weights, size, seed):
         "base_log_probabilities": base.tolist(),
         "conditional_log_probabilities": conditional.tolist(),
         "inclusion_probabilities": None,
+    }
+
+
+def fixed_size_dependent_rounding(inclusion_probabilities, seed):
+    """Round first-order inclusion probabilities to one fixed-size sample.
+
+    The input must be in [0,1] and sum to an integer N.  Randomized pairwise
+    dependent rounding preserves every first-order marginal in expectation,
+    preserves the sum on every update, and returns exactly N distinct items.
+    The final selected set is put in a separate seeded random order so Reward
+    training does not inherit pool-index order.
+    """
+    if type(seed) is not int or seed < 0:
+        raise ValueError("seed must be a nonnegative integer")
+    original = np.asarray(inclusion_probabilities, dtype=np.float64)
+    if (original.ndim != 1 or not len(original) or not np.isfinite(original).all()
+            or np.any(original < -1e-12) or np.any(original > 1 + 1e-12)):
+        raise ValueError("inclusion probabilities must be a finite vector in [0,1]")
+    total = float(original.sum(dtype=np.float64))
+    size = int(round(total))
+    if not np.isclose(total, size, rtol=0, atol=1e-9) or not 0 <= size <= len(original):
+        raise ValueError("inclusion probabilities must sum to an integer sample size")
+    probabilities = np.clip(original.copy(), 0.0, 1.0)
+    probabilities[probabilities < 1e-14] = 0.0
+    probabilities[probabilities > 1 - 1e-14] = 1.0
+    rng = np.random.default_rng(seed)
+    pending = np.flatnonzero((probabilities > 0) & (probabilities < 1)).tolist()
+    rng.shuffle(pending)
+    random_updates = 0
+    while len(pending) >= 2:
+        i, j = pending.pop(), pending.pop()
+        alpha = min(1 - probabilities[i], probabilities[j])
+        beta = min(probabilities[i], 1 - probabilities[j])
+        denominator = alpha + beta
+        if denominator <= 0 or not np.isfinite(denominator):
+            raise RuntimeError("Dependent rounding reached an invalid fractional pair")
+        if rng.random() < beta / denominator:
+            probabilities[i] += alpha
+            probabilities[j] -= alpha
+        else:
+            probabilities[i] -= beta
+            probabilities[j] += beta
+        random_updates += 1
+        for index in (i, j):
+            if probabilities[index] < 1e-12:
+                probabilities[index] = 0.0
+            elif probabilities[index] > 1 - 1e-12:
+                probabilities[index] = 1.0
+            else:
+                pending.append(index)
+    if pending:
+        index = pending.pop()
+        required = size - int(np.count_nonzero(probabilities == 1))
+        if required not in (0, 1) or not np.isclose(probabilities[index], required, atol=1e-9):
+            raise RuntimeError("Dependent rounding left a nonintegral residual")
+        probabilities[index] = float(required)
+    selected = np.flatnonzero(probabilities == 1)
+    if len(selected) != size or np.any((probabilities != 0) & (probabilities != 1)):
+        raise RuntimeError("Dependent rounding did not return the fixed sample size")
+    ordered = rng.permutation(selected)
+    return {
+        "protocol": DEPENDENT_ROUNDING_PROTOCOL,
+        "seed": seed,
+        "size": size,
+        "pool_size": len(original),
+        "inclusion_probabilities_sha256": hashlib.sha256(
+            original.astype("<f8", copy=False).tobytes()).hexdigest(),
+        "ordered_indices": ordered.tolist(),
+        "selected_inclusion_probabilities": original[ordered].tolist(),
+        "marginals": "first_order_preserved_in_expectation",
+        "fixed_size": True,
+        "replacement": False,
+        "ordering": "seeded_uniform_permutation_after_rounding",
+        "random_pair_updates": random_updates,
     }

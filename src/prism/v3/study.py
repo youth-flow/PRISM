@@ -4,8 +4,10 @@ from pathlib import Path
 import numpy as np
 from scipy.linalg import lu_factor, lu_solve
 
+from prism.design import capped_simplex_gap
 from prism.io import digest, rows, write_rows
-from prism.weighted_sampling import weighted_without_replacement
+from prism.weighted_sampling import (fixed_size_dependent_rounding,
+                                     weighted_without_replacement)
 from .artifacts import Run, read_json, write_json
 
 
@@ -13,8 +15,8 @@ def lambda_name(value):
     return str(float(value))
 
 
-def independent_design_audit(v, K, q, ridge, tolerance, block_size=4096):
-    """LU rather than the solver's Cholesky path; certify the original simplex."""
+def independent_design_audit(v, K, q, ridge, tolerance, block_size=4096, budget=None):
+    """LU audit of either the original or budget-capped probability simplex."""
     v, K, q = (np.asarray(x, dtype=np.float64) for x in (v, K, q))
     if (v.ndim != 2 or q.shape != (len(v),) or K.shape != (v.shape[1], v.shape[1])
             or not all(np.isfinite(x).all() for x in (v, K, q)) or np.any(q < 0)
@@ -33,12 +35,16 @@ def independent_design_audit(v, K, q, ridge, tolerance, block_size=4096):
         block = v[start:start + block_size]
         gradient[start:start + len(block)] = -np.einsum("ij,ij->i", block @ B, block)
     objective = float(np.sum(K * inverse.T))
-    gap = max(0.0, float(q @ gradient - gradient.min()))
+    gap = (capped_simplex_gap(q, gradient, budget)[0] if budget is not None else
+           max(0.0, float(q @ gradient - gradient.min())))
     relative = gap / max(objective, 1e-15)
     if not np.isfinite(relative) or relative > tolerance:
-        raise ValueError(f"Selected Design failed independent original-space gap: {relative}")
+        raise ValueError(f"Selected Design failed independent feasible-space gap: {relative}")
     return {"objective": objective, "fw_gap": gap, "relative_gap": relative,
-            "tolerance": tolerance, "factorization": "independent_LU", "passed": True}
+            "tolerance": tolerance, "factorization": "independent_LU", "passed": True,
+            "feasible_region": ("budget_capped_simplex" if budget is not None else
+                                "original_probability_simplex"),
+            "budget": budget, "weight_upper_bound": (1.0 / budget if budget else None)}
 
 
 def freeze_study(c, budget, design_lambda=None, *, user_confirmed=False):
@@ -46,6 +52,9 @@ def freeze_study(c, budget, design_lambda=None, *, user_confirmed=False):
         raise ValueError("The user must choose the preference budget after the Design report")
     if type(budget) is not int or budget < 1:
         raise ValueError("Choose one positive integer preference budget")
+    v6 = c.get("v6") if isinstance(c.get("v6"), dict) else None
+    if v6 and budget != v6.get("preference_budget"):
+        raise ValueError("V6 study budget must match the precommitted capped Design budget")
     selected = c["design"]["preferred_lambda"] if design_lambda is None else design_lambda
     if type(selected) not in (int, float) or selected not in c["design"]["lambdas"]:
         raise ValueError("Select one of the three diagnosed Design ridge values")
@@ -73,13 +82,19 @@ def freeze_study(c, budget, design_lambda=None, *, user_confirmed=False):
     q = np.load(selected_dir / "q.npy", allow_pickle=False)
     if budget > int(np.count_nonzero(q > 0)):
         raise ValueError("Preference budget exceeds the actual positive-weight support; no mass will be added")
-    audit = independent_design_audit(v, K, q, selected, c["design"]["relative_gap"], c["design"]["block_size"])
-    value = {"protocol": "v3_user_budget_selection_v1", "budget": budget,
-             "budget_authority": "user_after_design_report", "user_budget_confirmed": True,
+    audit = independent_design_audit(v, K, q, selected, c["design"]["relative_gap"],
+                                     c["design"]["block_size"],
+                                     budget=budget if v6 else None)
+    value = {"protocol": ("v6_budget_capped_user_selection_v1" if v6 else
+                           "v3_user_budget_selection_v1"), "budget": budget,
+             "budget_authority": ("v6_precommitted_budget_contract" if v6 else
+                                  "user_after_design_report"),
+             "user_budget_confirmed": True,
              "design_lambda": float(selected), "design_lambda_authority": "assistant_diagnostics",
              "seed": c["study"]["seed"], "methods": c["study"]["methods"],
              "pool_size": len(ids), "positive_support": int(np.count_nonzero(q > 0)),
-             "q_sha256": digest(selected_dir / "q.npy"), "independent_design_audit": audit}
+             "q_sha256": digest(selected_dir / "q.npy"), "independent_design_audit": audit,
+             "sampling_protocol": c["sampling"]["protocol"]}
     target = run.file("study/selection.json")
     write_json(target, value)
     run.publish("study-selection", [target], dependencies + [selected_dir / "q.npy", selected_dir / "report.json"])
@@ -111,13 +126,29 @@ def sample(c):
     if digest(q_path) != selection["q_sha256"]:
         raise ValueError("Selected Design weights changed")
     distributions = {"empirical": empirical, "prism": np.load(q_path, allow_pickle=False)}
+    v6 = c.get("v6") if isinstance(c.get("v6"), dict) else None
     outputs, selected_ids = [], {}
     for method in c["study"]["methods"]:
-        result = weighted_without_replacement(distributions[method], selection["budget"], c["study"]["seed"])
+        if v6 and method == "prism":
+            inclusion = selection["budget"] * distributions[method]
+            if (np.any(inclusion < -1e-10) or np.any(inclusion > 1 + 1e-10)
+                    or not np.isclose(inclusion.sum(), selection["budget"], atol=1e-8)):
+                raise ValueError("V6 capped Design does not define valid inclusion probabilities")
+            result = fixed_size_dependent_rounding(inclusion, c["study"]["seed"])
+        else:
+            result = weighted_without_replacement(
+                distributions[method], selection["budget"], c["study"]["seed"])
         indices = result["ordered_indices"]
-        result.update(method=method, pair_ids=ids[indices].tolist(), common_gumbel_keys=False,
-                      shared_rng_seed=True, gumbel_key_alignment="positive_support_order",
+        result.update(method=method, pair_ids=ids[indices].tolist(),
+                      shared_rng_seed=True,
                       labels_are_existing_human_observations=True)
+        if v6 and method == "prism":
+            result.update(common_gumbel_keys=None,
+                          gumbel_key_alignment=None,
+                          design_weights_are_inclusion_probabilities_divided_by_budget=True)
+        else:
+            result.update(common_gumbel_keys=False,
+                          gumbel_key_alignment="positive_support_order")
         marker = run.file(f"sampling/{method}.json")
         write_json(marker, result)
         target = run.file(f"sampling/{method}.jsonl")
@@ -135,7 +166,10 @@ def sample(c):
                "unique_pairs": {m: len(v) for m, v in selected_ids.items()},
                "shared_pairs": len(set.intersection(*selected_ids.values())),
                "union_existing_human_labels": len(set.union(*selected_ids.values())),
-               "new_annotation_api_calls": 0, "sampling_protocol": c["sampling"]["protocol"]}
+               "new_annotation_api_calls": 0, "sampling_protocol": c["sampling"]["protocol"],
+               "method_protocols": {
+                   method: read_json(run.file(f"sampling/{method}.json"))["protocol"]
+                   for method in c["study"]["methods"]}}
     summary_path = run.file("sampling/summary.json")
     write_json(summary_path, summary)
     run.publish("sampling", outputs + [summary_path],

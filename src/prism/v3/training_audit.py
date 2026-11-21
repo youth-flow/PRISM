@@ -1,4 +1,6 @@
 """Independent human-label, sampling-law and penalized-BT numerical checks."""
+import hashlib
+
 import numpy as np
 from scipy.special import expit
 
@@ -6,6 +8,41 @@ from prism.io import digest, rows
 from .artifacts import Run, read_json, write_json
 from .reward import prediction_metrics
 from .study import lambda_name
+
+
+def _independent_dependent_rounding(inclusion, seed):
+    """Independent replay of V6 pairwise rounding and its output ordering."""
+    values = np.asarray(inclusion, dtype=np.float64).copy()
+    size = int(round(float(values.sum())))
+    values = np.clip(values, 0.0, 1.0)
+    values[values < 1e-14] = 0.0
+    values[values > 1 - 1e-14] = 1.0
+    rng = np.random.default_rng(seed)
+    pending = np.flatnonzero((values > 0) & (values < 1)).tolist()
+    rng.shuffle(pending)
+    while len(pending) >= 2:
+        i, j = pending.pop(), pending.pop()
+        up, down = min(1 - values[i], values[j]), min(values[i], 1 - values[j])
+        if rng.random() < down / (up + down):
+            values[i] += up
+            values[j] -= up
+        else:
+            values[i] -= down
+            values[j] += down
+        for index in (i, j):
+            if values[index] < 1e-12:
+                values[index] = 0.0
+            elif values[index] > 1 - 1e-12:
+                values[index] = 1.0
+            else:
+                pending.append(index)
+    if pending:
+        index = pending.pop()
+        values[index] = float(size - int(np.count_nonzero(values == 1)))
+    selected = np.flatnonzero(values == 1)
+    if len(selected) != size:
+        raise ValueError("Independent V6 dependent-rounding replay failed")
+    return rng.permutation(selected)
 
 
 def audit_training(c):
@@ -26,6 +63,7 @@ def audit_training(c):
     if digest(path) != selection["q_sha256"]:
         raise ValueError("Training audit Design identity changed")
     weights = {"empirical": empirical, "prism": np.load(path, allow_pickle=False)}
+    v6 = c.get("v6") if isinstance(c.get("v6"), dict) else None
     selected, sample_reports, previous_inputs = {}, {}, []
     for method in c["study"]["methods"]:
         records = rows(run.file(f"sampling/{method}.jsonl"))
@@ -41,23 +79,40 @@ def audit_training(c):
         positive = np.flatnonzero(w > 0)
         if np.any(w[index] <= 0):
             raise ValueError("Training audit found a sampled zero-weight pair")
-        noise = np.random.default_rng(selection["seed"]).gumbel(size=len(positive))
-        scores = np.log(w[positive]) + noise
-        # Lexicographic tie breaking independently reproduces stable Gumbel rank.
-        ranking = positive[np.lexsort((positive, -scores))]
-        if (not np.array_equal(index, ranking[:len(index)]) or metadata["ordered_indices"] != index.tolist()
-                or metadata["pair_ids"] != ids[index].tolist() or metadata.get("common_gumbel_keys") is not False
-                or metadata.get("shared_rng_seed") is not True or metadata.get("gumbel_key_alignment") != "positive_support_order"):
-            raise ValueError("Training audit weighted-WOR ordering or coupling record changed")
-        # Independent extended-precision suffix sums, rather than logaddexp scan.
-        suffix = np.cumsum(w[ranking[::-1]].astype(np.longdouble))[::-1]
-        log_remaining = np.log(suffix).astype(np.float64)
-        base = np.log(w[index]) - log_remaining[0]
-        conditional = np.log(w[index]) - log_remaining[:len(index)]
-        if (not np.allclose(base, metadata["base_log_probabilities"], rtol=0, atol=1e-10)
-                or not np.allclose(conditional, metadata["conditional_log_probabilities"], rtol=0, atol=1e-10)
-                or metadata.get("inclusion_probabilities") is not None):
-            raise ValueError("Training audit sequential probabilities differ from remaining-weight law")
+        if v6 and method == "prism":
+            inclusion = selection["budget"] * w
+            ranking = _independent_dependent_rounding(inclusion, selection["seed"])
+            inclusion_hash = hashlib.sha256(
+                inclusion.astype("<f8", copy=False).tobytes()).hexdigest()
+            if (not np.array_equal(index, ranking)
+                    or metadata.get("protocol") != "fixed_size_dependent_rounding_v1"
+                    or metadata.get("ordered_indices") != index.tolist()
+                    or metadata.get("pair_ids") != ids[index].tolist()
+                    or metadata.get("inclusion_probabilities_sha256") != inclusion_hash
+                    or not np.allclose(metadata.get("selected_inclusion_probabilities"),
+                                       inclusion[index], rtol=0, atol=1e-12)
+                    or metadata.get("fixed_size") is not True
+                    or metadata.get("replacement") is not False
+                    or metadata.get("design_weights_are_inclusion_probabilities_divided_by_budget") is not True):
+                raise ValueError("Training audit V6 dependent-rounding record changed")
+        else:
+            noise = np.random.default_rng(selection["seed"]).gumbel(size=len(positive))
+            scores = np.log(w[positive]) + noise
+            # Lexicographic tie breaking independently reproduces stable Gumbel rank.
+            ranking = positive[np.lexsort((positive, -scores))]
+            if (not np.array_equal(index, ranking[:len(index)]) or metadata["ordered_indices"] != index.tolist()
+                    or metadata["pair_ids"] != ids[index].tolist() or metadata.get("common_gumbel_keys") is not False
+                    or metadata.get("shared_rng_seed") is not True or metadata.get("gumbel_key_alignment") != "positive_support_order"):
+                raise ValueError("Training audit weighted-WOR ordering or coupling record changed")
+            # Independent extended-precision suffix sums, rather than logaddexp scan.
+            suffix = np.cumsum(w[ranking[::-1]].astype(np.longdouble))[::-1]
+            log_remaining = np.log(suffix).astype(np.float64)
+            base = np.log(w[index]) - log_remaining[0]
+            conditional = np.log(w[index]) - log_remaining[:len(index)]
+            if (not np.allclose(base, metadata["base_log_probabilities"], rtol=0, atol=1e-10)
+                    or not np.allclose(conditional, metadata["conditional_log_probabilities"], rtol=0, atol=1e-10)
+                    or metadata.get("inclusion_probabilities") is not None):
+                raise ValueError("Training audit sequential probabilities differ from remaining-weight law")
         selected[method] = (v[index], np.array([r["label"] for r in records], dtype=float))
         previous = run.file(f"attempts/sampling-metadata-20261117/sampling/{method}.jsonl")
         same_previous = None
@@ -68,6 +123,7 @@ def audit_training(c):
             same_previous = True
         sample_reports[method] = {"distinct_pairs": len(index), "positive_support": len(positive),
                                   "human_labels_exact": True, "independent_wor_replay_exact": True,
+                                  "sampling_protocol": metadata["protocol"],
                                   "corrected_metadata_selection_unchanged": same_previous}
     with np.load(run.file("features/reward_dev.npz"), allow_pickle=False) as f:
         phi, dev_ids = f["phi"].astype(np.float64), f["ids"].astype(str)

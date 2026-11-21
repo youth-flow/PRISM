@@ -77,11 +77,21 @@ def validate(c):
         _number(design.get(key), "design." + key, positive=True)
     for key in ("max_iter", "block_size"):
         _integer(design.get(key), "design." + key)
-    if design.get("solver") != "joint-lbfgs" or design.get("probability_floor") != 0.0 or design.get("extra_constraints") != "none":
+    v6 = isinstance(c.get("v6"), dict)
+    if v6:
+        if (design.get("solver") != "capped-away-fw"
+                or design.get("probability_floor") != 0.0
+                or design.get("extra_constraints") != "sum_q=1_and_0<=q_i<=1/N"):
+            raise ValueError("V6 requires the declared budget-capped Design solver and no probability floor")
+    elif (design.get("solver") != "joint-lbfgs" or design.get("probability_floor") != 0.0
+          or design.get("extra_constraints") != "none"):
         raise ValueError("Keep the original simplex target and solver; do not add probability mass or caps")
     sampling = c["sampling"]
-    if sampling.get("protocol") != "weighted_without_replacement_gumbel_v1" or sampling.get("replacement") is not False or sampling.get("empirical") != "uniform_valid_pair":
-        raise ValueError("V3 requires weighted sequential sampling without replacement")
+    expected_sampling = ("v6_budget_capped_exact_without_replacement_v1" if v6 else
+                         "weighted_without_replacement_gumbel_v1")
+    if (sampling.get("protocol") != expected_sampling or sampling.get("replacement") is not False
+            or sampling.get("empirical") != "uniform_valid_pair"):
+        raise ValueError("Use the protocol-specific fixed finite-pool sampling law")
     if reward.get("backbone_trainable") is not False or reward.get("bias") is not False or reward.get("feature_dimension") != data["feature_dimension"]:
         raise ValueError("Reward is a frozen feature map and a bias-free linear head")
     candidates = reward.get("l2_candidates")

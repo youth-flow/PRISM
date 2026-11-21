@@ -4,7 +4,7 @@ from itertools import permutations
 import numpy as np
 import pytest
 
-from prism.weighted_sampling import weighted_without_replacement
+from prism.weighted_sampling import fixed_size_dependent_rounding, weighted_without_replacement
 
 
 def test_exact_prefix_replay_no_duplicates_and_zero_exclusion():
@@ -76,6 +76,43 @@ def test_does_not_consume_global_numpy_rng():
         np.random.set_state(original)
 
 
+def test_dependent_rounding_is_exact_replay_fixed_size_and_nonmutating():
+    probabilities = np.array([1., .8, .7, .3, .2, 0.])
+    original = probabilities.copy()
+    sample = fixed_size_dependent_rounding(probabilities, 31)
+    assert sample == fixed_size_dependent_rounding(probabilities, 31)
+    assert sample["size"] == 3
+    assert len(sample["ordered_indices"]) == 3
+    assert len(set(sample["ordered_indices"])) == 3
+    assert 0 in sample["ordered_indices"]
+    assert 5 not in sample["ordered_indices"]
+    assert sample["fixed_size"] and not sample["replacement"]
+    np.testing.assert_array_equal(probabilities, original)
+
+
+def test_dependent_rounding_preserves_first_order_marginals():
+    probabilities = np.array([1., .8, .7, .3, .2, 0.])
+    trials = 8000
+    counts = np.zeros(len(probabilities), dtype=np.int64)
+    for seed in range(trials):
+        counts[fixed_size_dependent_rounding(probabilities, seed)["ordered_indices"]] += 1
+    standard_errors = np.sqrt(probabilities * (1 - probabilities) / trials)
+    assert np.all(np.abs(counts / trials - probabilities) < 7 * standard_errors + 2 / trials)
+
+
+def test_dependent_rounding_does_not_consume_global_numpy_rng():
+    original = np.random.get_state()
+    try:
+        np.random.seed(871)
+        before = np.random.get_state()
+        fixed_size_dependent_rounding([.8, .7, .3, .2], 17)
+        after = np.random.get_state()
+        assert before[0] == after[0] and before[2:] == after[2:]
+        np.testing.assert_array_equal(before[1], after[1])
+    finally:
+        np.random.set_state(original)
+
+
 @pytest.mark.parametrize("weights,size,seed", [
     ([], 0, 1), ([0., 0.], 0, 1), ([1., -1.], 1, 1),
     ([np.nan, 1.], 1, 1), ([np.inf, 1.], 1, 1), ([[1., 2.]], 1, 1),
@@ -85,3 +122,13 @@ def test_does_not_consume_global_numpy_rng():
 def test_rejects_invalid_inputs_without_changing_distribution(weights, size, seed):
     with pytest.raises(ValueError):
         weighted_without_replacement(weights, size, seed)
+
+
+@pytest.mark.parametrize("probabilities,seed", [
+    ([], 1), ([.5, .5, .5], 1), ([1.1, -.1], 1),
+    ([np.nan, 1.], 1), ([np.inf, 0.], 1), ([[.5, .5]], 1),
+    ([.5, .5], -1), ([.5, .5], True),
+])
+def test_dependent_rounding_rejects_invalid_inputs(probabilities, seed):
+    with pytest.raises(ValueError):
+        fixed_size_dependent_rounding(probabilities, seed)

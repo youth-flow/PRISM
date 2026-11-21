@@ -89,7 +89,10 @@ def audit(c, *, require_complete=False):
         with np.load(run.file("geometry/geometry.npz"), allow_pickle=False) as array:
             v, K = array["v"], array["K"]
         q = np.load(run.file(f"design/lambda-{lambda_name(selection['design_lambda'])}/q.npy"), allow_pickle=False)
-        checks["selected_original_design"] = independent_design_audit(v, K, q, selection["design_lambda"], c["design"]["relative_gap"], c["design"]["block_size"])
+        checks["selected_original_design"] = independent_design_audit(
+            v, K, q, selection["design_lambda"], c["design"]["relative_gap"],
+            c["design"]["block_size"],
+            budget=selection["budget"] if isinstance(c.get("v6"), dict) else None)
     for method in c["study"]["methods"]:
         if "policy-" + method in snapshot["completed_stages"]:
             report = read_json(run.file(f"policy/{method}/report.json"))
