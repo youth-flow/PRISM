@@ -90,7 +90,10 @@ def main(argv=None):
         if args.stage == "import-upstream":
             if not args.upstream_config:
                 parser.error("import-upstream requires --upstream-config")
-            from prism.v5.bootstrap import import_upstream
+            if isinstance(c.get("v6"), dict):
+                from prism.v6.bootstrap import import_upstream
+            else:
+                from prism.v5.bootstrap import import_upstream
             value = import_upstream(c, args.upstream_config)
         elif args.stage == "download-data":
             from .data import download_raw

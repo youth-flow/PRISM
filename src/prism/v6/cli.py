@@ -11,6 +11,7 @@ from .config import load_config, plan
 DEFAULT_CONFIG = str(Path(__file__).resolve().parents[3] / "configs/experiment.v6.yaml")
 LOCAL_STAGES = {"validate", "plan"}
 EXECUTION_STAGES = {
+    "import-upstream",
     "resource", "status", "download-data", "prepare-data", "extract-features",
     "merge-features", "geometry", "geometry-audit", "design", "design-report",
     "freeze-study", "sample", "reward", "audit-training", "prepare-shared",

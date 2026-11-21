@@ -81,3 +81,9 @@ prism-v6 plan
 Execution stages remain behind the normal explicit stage commands and V6
 guards. Study freeze requires budget 20,000 and Design lambda 0.001; primary
 linear PPO must stop at episode 16,384.
+
+For efficient execution, `import-upstream` may hash-recertify only the V5
+`data`, `features`, `geometry`, `geometry-audit`, and `shared-sft` stages. It
+explicitly excludes every Design distribution and all sampling, Reward, PPO,
+and evaluation artifacts because those are budget-dependent or downstream of
+the new constrained solution.
